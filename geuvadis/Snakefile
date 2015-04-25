@@ -1,0 +1,30 @@
+import os
+
+ANNO_FA = "index/Homo_sapiens.GRCh37.75.cdna.pc.fa"
+KAL_IDX = ANNO_FA + ".kidx"
+
+GEUVADIS_SAMPLES = os.listdir("data")
+
+rule all:
+    input:
+        #KAL_IDX
+        expand("analysis/kallisto/{sample}/abundance.h5",
+            sample = GEUVADIS_SAMPLES)
+
+# generate the kallisto index
+rule kallisto_index:
+    input:
+        ANNO_FA
+    output:
+        KAL_IDX
+    shell:
+        "kallisto index -f {input} -i {output}"
+
+rule kallisto:
+    input:
+        "data/{sample}/{sample}_1.fastq.gz",
+        "data/{sample}/{sample}_2.fastq.gz"
+    output:
+        "analysis/kallisto/{sample}/abundance.h5" 
+    shell:
+        "echo 'sup' > {output}"
