@@ -1,17 +1,26 @@
 HUMAN_PRE = "NA12716_7"
-ANNO_PREFIX = "Homo_sapiens.GRCh37.75.cdna.pc"
-ANNO_FA = "{0}.fa".format( ANNO_PREFIX )
 
-RSEM_REF = "{0}_rsem/ref".format( ANNO_PREFIX )
-KAL_IDX = "{0}.idx".format( ANNO_PREFIX )
+# annotations
+ANNO = "../annotation"
+ANNO_PREFIX = "Homo_sapiens.GRCh37.75.cdna.pc"
+ANNO_FA = "{0}/{1}.fa".format( ANNO, ANNO_PREFIX )
+
+# tool-specific indeces
+IDX = "../index"
+BWT_IDX = "../index/{0}".format( ANNO_PREFIX )
+RSEM_REF = "{0}/{1}_rsem/ref".format( IDX, ANNO_PREFIX )
+KAL_IDX = "{0}/{1}.kidx".format( IDX, ANNO_PREFIX )
+SALMON_IDX = "{0}/{1}_salmon_idx".format( IDX, ANNO_PREFIX )
 
 N_THREADS = 20
+
+# total number of simulations
 SIMS_LIST = [i for i in range(1, 21)]
 
 rule all:
     input:
         # generate the salmon index
-        ANNO_PREFIX + "_salmon_idx",
+        SALMON_IDX,
         # quantify HUMAN_PRE with RSEM
         "{0}/rsem/out.isoforms.results".format( HUMAN_PRE ),
         # generate simulations using RSEM
@@ -23,15 +32,112 @@ rule all:
         # quantify using eXpress
         expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/express/results.xprs", id = SIMS_LIST )
 
+########################################################################
+# INDICES
+########################################################################
+
+# TODO: show bowtie2 index generation
+
+# Prepare the main annotation to run RSEM on it
+rule rsem_prepare:
+    input:
+        ANNO_FA
+    output:
+        "{0}.grp".format( RSEM_REF )
+    run:
+        out_dir = '{0}/{1}_rsem'.format( IDX, ANNO_PREFIX )
+        shell('mkdir -p {0}'.format( out_dir ) )
+        shell('rsem-prepare-reference {0} {1}'.format( ANNO_FA, RSEM_REF ))
+
 # generate the salmon index
 rule salmon_index:
     output:
-        "{0}_salmon_idx".format( ANNO_PREFIX )
+        SALMON_IDX
     threads: N_THREADS
     shell:
         'salmon index '
         '-t ' + ANNO_FA + ' '
         '-i {output} '
+
+########################################################################
+# REAL DATA TO ACT AS SEED FOR SIMULATIONS
+########################################################################
+
+# align for RSEM on "real" data
+rule rsem_align:
+    input:
+        "{sample}/{sample}_1.fastq.gz", 
+        "{sample}/{sample}_2.fastq.gz"
+    output:
+        "{sample}/alignments/{sample}_rsem.bam"
+    benchmark:
+        "benchmarks/rsem_align/{sample}.json"
+    threads:
+        N_THREADS
+    message:
+        'Running bowtie2 (thr = {threads}) on {input}'
+    shell:
+        'bowtie2 '
+        '--sensitive --dpad 0 --gbar 99999999 --mp 1,1 --np 1 --score-min L,0,-0.1 '
+        '--no-mixed --no-discordant '
+        '--seed 42 '
+        '-k 200 '
+        '-x ' + BWT_IDX + ' '
+        '-p {threads} '
+        '-1 {input[0]} '
+        '-2 {input[1]} | '
+        'samtools view -Sb - > {output}'
+
+# Run RSEM on a "real" sample
+rule rsem:
+    input:
+        "{sample}/alignments/{sample}_rsem.bam"
+    output:
+        "{sample}/rsem/out.isoforms.results"
+    benchmark:
+        "benchmarks/rsem/{sample}.json"
+    threads:
+        N_THREADS
+    message:
+        "Executing RSEM with {input}"
+    run:
+        shell("mkdir -p {wildcards.sample}/rsem")
+        out_prefix = "{wildcards.sample}/rsem/out"
+        cmd = " ".join(["rsem-calculate-expression", "--bam", "--paired-end",
+            "--no-bam-output", "-p {threads}", "{input}", RSEM_REF, out_prefix])
+        shell(cmd)
+
+########################################################################
+# GENERATE SIMULATIONS
+########################################################################
+
+# Simulate from RSEM using errors
+rule rsem_simulate:
+    input:
+        "{sample}/rsem/out.isoforms.results"
+    output:
+        "{sample}/rsem/sim/{n_reads,\d+}/{sim_num,\d+}_1.fq.gz",
+        "{sample}/rsem/sim/{n_reads,\d+}/{sim_num,\d+}_2.fq.gz"
+    threads: 1
+    run:
+        shell("mkdir -p {wildcards.sample}/rsem/sim/{wildcards.n_reads}")
+        res = "{wildcards.sample}/rsem/sim/{wildcards.n_reads}/{wildcards.sim_num}"
+        cmd = " ".join([
+            "rsem-simulate-reads",
+            RSEM_REF,
+            "{wildcards.sample}/rsem/out.stat/out.model",
+            "{wildcards.sample}/rsem/out.isoforms.results",
+            "0.0",
+            "{wildcards.n_reads}",
+            "{wildcards.sample}/rsem/sim/{wildcards.n_reads}/{wildcards.sim_num}",
+            "--seed", "{wildcards.sim_num}"
+            ])
+        shell(cmd)
+        shell("gzip {0}*.fq".format( res ))
+
+########################################################################
+# QUANTIFY SIMULATIONS
+########################################################################
 
 # Run Salmon on RSEM simulations
 rule salmon_rsem_sim:
@@ -46,7 +152,7 @@ rule salmon_rsem_sim:
         1
     shell:
         'salmon quant '
-        '-i ' + ANNO_PREFIX + '_salmon_idx '
+        '-i ' + SALMON_IDX + ' '
         '-p {threads} '
         '--libType IU '
         '-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/salmon '
@@ -85,7 +191,7 @@ rule bwt2_express_rsem_sim:
         'bowtie2 '
         '--no-mixed --no-discordant --rdg 6,5 --rfg 6,5 --score-min L,-.6,-.4 '
         '-k 200 '
-        '-x ' + ANNO_PREFIX + ' '
+        '-x ' + BWT_IDX + ' '
         '-p {threads} '
         '-1 {input[0]} '
         '-2 {input[1]} |'
@@ -102,88 +208,8 @@ rule kallisto_rsem_sim:
         "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/kallisto.json"
     threads: 1
     message:
-        "dev_kallisto quant on {input[0]} {output}"
+        "kallisto quant on {input[0]} {output}"
     shell:
-        "dev_kallisto quant -i " + KAL_IDX + " "
+        "kallisto quant -i " + KAL_IDX + " "
         "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}"
         "/{wildcards.sim_id}/kallisto {input[0]} {input[1]}"
-        
-# Prepare the main annotation to run RSEM on it
-rule rsem_prepare:
-    input:
-        ANNO_FA
-    output:
-        "{0}.grp".format( RSEM_REF )
-    run:
-        out_dir = '{0}_rsem'.format( ANNO_PREFIX )
-        shell('mkdir -p {0}'.format( out_dir ) )
-        shell('rsem-prepare-reference {0} {1}'.format( ANNO_FA, RSEM_REF ))
-
-# align for RSEM on "real" data
-rule rsem_align:
-    input:
-        "{sample}/{sample}_1.fastq.gz", 
-        "{sample}/{sample}_2.fastq.gz"
-    output:
-        "{sample}/alignments/{sample}_rsem.bam"
-    benchmark:
-        "benchmarks/rsem_align/{sample}.json"
-    threads:
-        N_THREADS
-    message:
-        'Running bowtie2 (thr = {threads}) on {input}'
-    shell:
-        'bowtie2 '
-        '--sensitive --dpad 0 --gbar 99999999 --mp 1,1 --np 1 --score-min L,0,-0.1 '
-        '--no-mixed --no-discordant '
-        '--seed 42 '
-        '-k 200 '
-        '-x ' + ANNO_PREFIX + ' '
-        '-p {threads} '
-        '-1 {input[0]} '
-        '-2 {input[1]} | '
-        'samtools view -Sb - > {output}'
-
-# Run RSEM on a "real" sample"
-rule rsem:
-    input:
-        "{sample}/alignments/{sample}_rsem.bam"
-    output:
-        "{sample}/rsem/out.isoforms.results"
-    benchmark:
-        "benchmarks/rsem/{sample}.json"
-    threads:
-        N_THREADS
-    message:
-        "Executing RSEM with {input}"
-    run:
-        shell("mkdir -p {wildcards.sample}/rsem")
-        out_prefix = "{wildcards.sample}/rsem/out"
-        cmd = " ".join(["rsem-calculate-expression", "--bam", "--paired-end",
-            "--no-bam-output", "-p {threads}", "{input}", RSEM_REF, out_prefix])
-        shell(cmd)
-
-
-# Simulate from RSEM using errors
-rule rsem_simulate:
-    input:
-        "{sample}/rsem/out.isoforms.results"
-    output:
-        "{sample}/rsem/sim/{n_reads,\d+}/{sim_num,\d+}_1.fq.gz",
-        "{sample}/rsem/sim/{n_reads,\d+}/{sim_num,\d+}_2.fq.gz"
-    threads: 1
-    run:
-        shell("mkdir -p {wildcards.sample}/rsem/sim/{wildcards.n_reads}")
-        res = "{wildcards.sample}/rsem/sim/{wildcards.n_reads}/{wildcards.sim_num}"
-        cmd = " ".join([
-            "rsem-simulate-reads",
-            RSEM_REF,
-            "{wildcards.sample}/rsem/out.stat/out.model",
-            "{wildcards.sample}/rsem/out.isoforms.results",
-            "0.0",
-            "{wildcards.n_reads}",
-            "{wildcards.sample}/rsem/sim/{wildcards.n_reads}/{wildcards.sim_num}",
-            "--seed", "{wildcards.sim_num}"
-            ])
-        shell(cmd)
-        shell("gzip {0}*.fq".format( res ))
