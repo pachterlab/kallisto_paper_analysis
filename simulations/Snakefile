@@ -4,6 +4,11 @@ HUMAN_PRE = "NA12716_7"
 ANNO = "../annotation"
 ANNO_PREFIX = "Homo_sapiens.GRCh37.75.cdna.pc"
 ANNO_FA = "{0}/{1}.fa".format( ANNO, ANNO_PREFIX )
+ANNO_GTF = "{0}/Homo_sapiens.GRCh37.75.sub.gtf".format( ANNO )
+
+# genomes
+GENOME_FA = "../GRCh37_75/Homo_sapiens.GRCh37.75.dna.primary_assembly.fa"
+GENOME_BWT_IDX = "../GRCh37_75/Homo_sapiens.GRCh37.75.dna.primary_assembly"
 
 # tool-specific indeces
 IDX = "../index"
@@ -19,18 +24,19 @@ SIMS_LIST = [i for i in range(1, 21)]
 
 rule all:
     input:
-        # generate the salmon index
-        SALMON_IDX,
-        # quantify HUMAN_PRE with RSEM
-        "{0}/rsem/out.isoforms.results".format( HUMAN_PRE ),
-        # generate simulations using RSEM
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{sims}_1.fq.gz", sims = SIMS_LIST),
-        # quantify using kallisto
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto/expression.h5", id = SIMS_LIST ),
-        # quantify using salmon
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/salmon/quant.sf", id = SIMS_LIST ),
-        # quantify using eXpress
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/express/results.xprs", id = SIMS_LIST )
+#        # generate the salmon index
+#        SALMON_IDX,
+#        # quantify HUMAN_PRE with RSEM
+#        "{0}/rsem/out.isoforms.results".format( HUMAN_PRE ),
+#        # generate simulations using RSEM
+#        expand(HUMAN_PRE + "/rsem/sim/30000000/{sims}_1.fq.gz", sims = SIMS_LIST),
+#        # quantify using kallisto
+#        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto/expression.h5", id = SIMS_LIST ),
+#        # quantify using salmon
+#        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/salmon/quant.sf", id = SIMS_LIST ),
+#        # quantify using eXpress
+#        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/express/results.xprs", id = SIMS_LIST )
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/tophat/accepted_hits.bam", id = SIMS_LIST )
 
 ########################################################################
 # INDICES
@@ -136,6 +142,76 @@ rule rsem_simulate:
         shell("gzip {0}*.fq".format( res ))
 
 ########################################################################
+# ALIGNMENTS
+########################################################################
+
+# run bowtie2 on RSEM simulated data for eXpress
+rule bwt2_express_rsem_sim:
+    input:
+        "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
+        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz"
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/alignments/bwt2.bam"
+    benchmark:
+        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/bwt2.json"
+    threads: N_THREADS
+    shell:
+        'bowtie2 '
+        '--no-mixed --no-discordant --rdg 6,5 --rfg 6,5 --score-min L,-.6,-.4 '
+        '-k 200 '
+        '-x ' + BWT_IDX + ' '
+        '-p {threads} '
+        '-1 {input[0]} '
+        '-2 {input[1]} |'
+        'samtools view -Sb - > {output}'
+
+# bwt2 alignments for RSEM
+rule bwt2_rsem_rsem_sim:
+    input:
+        "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
+        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz"
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/alignments/bwt2_rsem.bam"
+    benchmark:
+        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/bwt2_rsem.json"
+    threads: N_THREADS
+    message:
+        'Running bowtie2 (thr = {threads}) on {input}'
+    shell:
+        'bowtie2 '
+        '--sensitive --dpad 0 --gbar 99999999 --mp 1,1 --np 1 --score-min L,0,-0.1 '
+        '--no-mixed --no-discordant '
+        '--seed 42 '
+        '-k 200 '
+        '-x ' + BWT_IDX + ' '
+        '-p {threads} '
+        '-1 {input[0]} '
+        '-2 {input[1]} | '
+        'samtools view -Sb - > {output}'
+
+rule tophat_rsem_sim:
+    input:
+        "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
+        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
+        ANNO_GTF
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/tophat/accepted_hits.bam" 
+    benchmark:
+        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/tophat.json"
+    threads: N_THREADS
+    message:
+        'Running TopHat2 (thr = {threads}) on {input}'
+    shell:
+        'tophat2 '
+        '-G {ANNO_GTF} '
+        '--transcriptome-index ' + IDX + '/tophat_{ANNO_GTF} '
+        '--transcriptome-only '
+        '-p {threads} '
+        '-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/tophat '
+        + GENOME_BWT_IDX + ' '
+        '{input[0]} {input[1]}'
+
+########################################################################
 # QUANTIFY SIMULATIONS
 ########################################################################
 
@@ -177,25 +253,6 @@ rule express_rsem_sim:
         ANNO_FA + ' '
         '{input}'
 
-# run bowtie2 on RSEM simulated data for eXpress
-rule bwt2_express_rsem_sim:
-    input:
-        "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
-        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz"
-    output:
-        "{sample}/rsem/sim/{nreads}/{sim_id}/alignments/bwt2.bam"
-    benchmark:
-        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/bwt2.json"
-    threads: N_THREADS
-    shell:
-        'bowtie2 '
-        '--no-mixed --no-discordant --rdg 6,5 --rfg 6,5 --score-min L,-.6,-.4 '
-        '-k 200 '
-        '-x ' + BWT_IDX + ' '
-        '-p {threads} '
-        '-1 {input[0]} '
-        '-2 {input[1]} |'
-        'samtools view -Sb - > {output}'
 
 # Run kallisto on RSEM simulations
 rule kallisto_rsem_sim:
