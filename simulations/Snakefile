@@ -10,7 +10,7 @@ ANNO_GTF = "{0}/Homo_sapiens.GRCh37.75.sub.gtf".format( ANNO )
 GENOME_FA = "../GRCh37_75/Homo_sapiens.GRCh37.75.dna.primary_assembly.fa"
 GENOME_BWT_IDX = "../GRCh37_75/Homo_sapiens.GRCh37.75.dna.primary_assembly"
 
-# tool-specific indeces
+# tool-specific indices
 IDX = "../index"
 BWT_IDX = "../index/{0}".format( ANNO_PREFIX )
 RSEM_REF = "{0}/{1}_rsem/ref".format( IDX, ANNO_PREFIX )
@@ -37,7 +37,9 @@ rule all:
 #        # quantify using eXpress
 #        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/express/results.xprs", id = SIMS_LIST )
         # TopHat on simulations
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/tophat/accepted_hits.bam", id = SIMS_LIST )
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/tophat/accepted_hits.bam", id = SIMS_LIST )
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/tophat/accepted_hits.bam", id = [6] ),
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/cufflinks/isoforms.fpkm_tracking", id = [6] )
 
 ########################################################################
 # INDICES
@@ -215,6 +217,29 @@ rule tophat_rsem_sim:
 ########################################################################
 # QUANTIFY SIMULATIONS
 ########################################################################
+
+# TODO: sailfish quant
+
+# TODO: cufflinks quant
+rule cufflinks_rsem_sim:
+    input:
+        ANNO_GTF,
+        rules.tophat_rsem_sim.output
+    output:
+        '{sample}/rsem/sim/{nreads}/{sim_id}/cufflinks/isoforms.fpkm_tracking'
+    benchmark:
+        'benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/cufflinks.json'
+    threads: N_THREADS
+    shell:
+        'cufflinks '
+        '-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/cufflinks '
+        '-p {threads} '
+        '-u '
+        '--quiet '
+        '--GTF {ANNO_GTF} '
+        '{input[1]}'
+        
+# TODO: RSEM quant
 
 # Run Salmon on RSEM simulations
 rule salmon_rsem_sim:
