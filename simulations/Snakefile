@@ -38,8 +38,10 @@ rule all:
 #        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/express/results.xprs", id = SIMS_LIST )
         # TopHat on simulations
         #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/tophat/accepted_hits.bam", id = SIMS_LIST )
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/tophat/accepted_hits.bam", id = [6] ),
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/cufflinks/isoforms.fpkm_tracking", id = [6] )
+        # Cufflinks on simulations
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/cufflinks/isoforms.fpkm_tracking", id = SIMS_LIST )
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/bwt2_rsem.bam", id = [6] )
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/rsem/out.isoforms.results", id = [6] )
 
 ########################################################################
 # INDICES
@@ -238,8 +240,25 @@ rule cufflinks_rsem_sim:
         '--quiet '
         '--GTF {ANNO_GTF} '
         '{input[1]}'
-        
+
 # TODO: RSEM quant
+rule rsem_rsem_sim:
+    input:
+        rules.bwt2_rsem_rsem_sim.output
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/rsem/out.isoforms.results"
+    benchmark:
+        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/rsem.json"
+    threads: N_THREADS
+    message:
+        "Executing RSEM with {input}"
+    run:
+        out_path = "{wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/rsem"
+        shell("mkdir -p " + out_path)
+        out_prefix = out_path + "/out"
+        cmd = " ".join(["rsem-calculate-expression", "--bam", "--paired-end",
+            "--no-bam-output", "-p {threads}", "{input}", RSEM_REF, out_prefix])
+        shell(cmd)
 
 # Run Salmon on RSEM simulations
 rule salmon_rsem_sim:
@@ -278,7 +297,6 @@ rule express_rsem_sim:
         '{wildcards.nreads}/{wildcards.sim_id}/express/ ' +
         ANNO_FA + ' '
         '{input}'
-
 
 # Run kallisto on RSEM simulations
 rule kallisto_rsem_sim:
