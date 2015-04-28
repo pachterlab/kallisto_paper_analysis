@@ -36,7 +36,8 @@ rule all:
 #        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/salmon/quant.sf", id = SIMS_LIST ),
 #        # quantify using eXpress
 #        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/express/results.xprs", id = SIMS_LIST )
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/tophat/accepted_hits.bam", id = SIMS_LIST )
+        # TopHat on simulations
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/tophat/accepted_hits.bam", id = SIMS_LIST )
 
 ########################################################################
 # INDICES
@@ -195,7 +196,7 @@ rule tophat_rsem_sim:
         "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
         ANNO_GTF
     output:
-        "{sample}/rsem/sim/{nreads}/{sim_id}/tophat/accepted_hits.bam" 
+        "{sample}/rsem/sim/{nreads}/{sim_id}/alignments/tophat/accepted_hits.bam" 
     benchmark:
         "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/tophat.json"
     threads: N_THREADS
@@ -207,7 +208,7 @@ rule tophat_rsem_sim:
         '--transcriptome-index ' + IDX + '/tophat_{ANNO_GTF} '
         '--transcriptome-only '
         '-p {threads} '
-        '-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/tophat '
+        '-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/alignments/tophat '
         + GENOME_BWT_IDX + ' '
         '{input[0]} {input[1]}'
 
