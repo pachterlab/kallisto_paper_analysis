@@ -42,7 +42,7 @@ rule all:
         # Cufflinks on simulations
         expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/cufflinks/isoforms.fpkm_tracking", id = SIMS_LIST ),
         #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/bwt2_rsem.bam", id = [6] )
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/rsem/out.isoforms.results", id = [6] ),
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/rsem/out.isoforms.results", id = SIMS_LIST ),
         SAILFISH_IDX,
         expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/sailfish/quant.sf", id = SIMS_LIST )
 

@@ -1,0 +1,98 @@
+---
+title: "Investigating RNA-Seq simulations"
+output:
+  html_document:
+    toc: true
+---
+
+```{r}
+library("data.table")
+library("dplyr")
+library("reshape2")
+library("sleuth")
+library("ggplot2")
+```
+
+# Loading the results
+
+Let's first get info on all the data
+
+```{r}
+setwd("kallisto_paper_analysis/simulations/analysis/R/")
+base_dir <- "../../NA12716_7/rsem/sim/30000000"
+cufflinks_fnames <- Sys.glob(paste0(fname_prefix, "/*/cufflinks/isoforms.fpkm_tracking"))
+```
+
+```{r}
+get_oracle_mean_fl <- function(oracle) {
+  tab <- table(oracle$length - oracle$eff_length)
+  as.numeric(names(which(tab == max(tab)))[1])
+}
+```
+
+Load all data
+
+```{r,warning=FALSE}
+all_oracle <- lapply(1:20,
+  function(id)
+  {
+    fname <- file.path(base_dir, paste0(id, ".sim.isoforms.results"))
+    read.table(fname, header = TRUE, stringsAsFactors = FALSE) %>%
+      select(target_id = transcript_id, counts = count, tpm = TPM,
+        eff_length = effective_length, length)
+  })
+
+oracle_mfl <- lapply(all_oracle, get_oracle_mean_fl)
+
+all_xprs <- lapply(1:20,
+  function(id)
+  {
+    fname <- file.path(base_dir, id, "express", "results.xprs")
+    read_xprs(fname)
+  })
+
+all_cufflinks <- lapply(1:20,
+  function(id)
+  {
+    fname <- file.path(base_dir, id, "cufflinks", "isoforms.fpkm_tracking")
+    read_cufflinks(fname, oracle_mfl[[id]])
+  })
+
+all_sailfish <- lapply(1:20,
+  function(id)
+  {
+    fname <- file.path(base_dir, id, "sailfish", "quant.sf")
+    read_sailfish(fname)
+  })
+```
+
+```{r}
+mr <- lapply(seq_along(all_oracle),
+  function(id)
+  {
+    merge_results(
+      list(all_sailfish[[id]], all_xprs[[id]], all_cufflinks[[id]]),
+      c("sailfish", "express", "cufflinks"),
+      all_oracle[[id]])
+  })
+```
+
+```{r}
+no_filt_all <- lapply(mr,
+    function(res)
+    {
+        filtered_summary(res)$est_counts
+    }) %>%
+    rbind_all()
+```
+
+```{r}
+ggplot(no_filt_all, aes(method, spearman)) +
+  geom_boxplot() +
+  ylim(0.8, 1)
+```
+
+```{r}
+ggplot(no_filt_all, aes(method, med_scaled_err)) +
+  geom_boxplot()
+```
