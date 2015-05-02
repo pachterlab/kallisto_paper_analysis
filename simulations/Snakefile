@@ -32,7 +32,7 @@ rule all:
 #        # generate simulations using RSEM
 #        expand(HUMAN_PRE + "/rsem/sim/30000000/{sims}_1.fq.gz", sims = SIMS_LIST),
 #        # quantify using kallisto
-#        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto/expression.h5", id = SIMS_LIST ),
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto/abundance.h5", id = SIMS_LIST ),
 #        # quantify using salmon
 #        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/salmon/quant.sf", id = SIMS_LIST ),
 #        # quantify using eXpress
@@ -44,7 +44,8 @@ rule all:
         #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/bwt2_rsem.bam", id = [6] )
         expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/rsem/out.isoforms.results", id = SIMS_LIST ),
         SAILFISH_IDX,
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/sailfish/quant.sf", id = SIMS_LIST )
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/sailfish/quant.sf", id = SIMS_LIST ),
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/htseq/gene_counts.txt", id = SIMS_LIST )
 
 ########################################################################
 # INDICES
@@ -82,6 +83,15 @@ rule sailfish_index:
         '-t ' + ANNO_FA + ' '
         '-o {output} '
         '-k 21'
+
+rule kallisto_index:
+    output:
+        KAL_IDX
+    threads: 1
+    shell:
+        'kallisto index '
+        '-i ' + KAL_IDX + ' ' +
+        ANNO_FA
 
 ########################################################################
 # REAL DATA TO ACT AS SEED FOR SIMULATIONS
@@ -330,15 +340,35 @@ rule express_rsem_sim:
 rule kallisto_rsem_sim:
     input:
         "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
-        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz"
+        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
+        KAL_IDX
     output:
-        "{sample}/rsem/sim/{nreads}/{sim_id}/kallisto/expression.h5"
+        "{sample}/rsem/sim/{nreads}/{sim_id}/kallisto/abundance.h5"
     benchmark:
         "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/kallisto.json"
     threads: 1
     message:
         "kallisto quant on {input[0]} {output}"
     shell:
-        "kallisto quant -i " + KAL_IDX + " "
+        "kallisto quant -i {KAL_IDX} "
         "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}"
         "/{wildcards.sim_id}/kallisto {input[0]} {input[1]}"
+
+########################################################################
+# Gene level analysis
+########################################################################
+
+rule htseq_rsem_sim:
+    input:
+        rules.tophat_rsem_sim.output,
+        ANNO_GTF
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/htseq/gene_counts.txt"
+    benchmark:
+        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/htseq_gene.json"
+    threads: 1
+    shell:
+        "htseq-count --stranded=no "
+        "-f bam "
+        "{input[0]} {input[1]} >"
+        "{output}"

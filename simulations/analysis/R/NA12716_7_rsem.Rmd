@@ -11,17 +11,18 @@ library("dplyr")
 library("reshape2")
 library("sleuth")
 library("ggplot2")
+library("rjson")
 ```
 
 # Loading the results
 
 Let's first get info on all the data
 
-```{r}
-setwd("kallisto_paper_analysis/simulations/analysis/R/")
-base_dir <- "../../NA12716_7/rsem/sim/30000000"
-cufflinks_fnames <- Sys.glob(paste0(fname_prefix, "/*/cufflinks/isoforms.fpkm_tracking"))
+```{r,echo=FALSE}
+base_dir <- "~/kallisto_paper_analysis/simulations/NA12716_7/rsem/sim/30000000"
 ```
+
+Helper function for cufflinks since it doesn't output effective length:
 
 ```{r}
 get_oracle_mean_fl <- function(oracle) {
@@ -30,9 +31,9 @@ get_oracle_mean_fl <- function(oracle) {
 }
 ```
 
-Load all data
+Load all data:
 
-```{r,warning=FALSE}
+```{r,warning=FALSE,cache=TRUE,echo=FALSE}
 all_oracle <- lapply(1:20,
   function(id)
   {
@@ -43,36 +44,59 @@ all_oracle <- lapply(1:20,
   })
 
 oracle_mfl <- lapply(all_oracle, get_oracle_mean_fl)
-
+```
+```{r,warning=FALSE,cache=TRUE}
 all_xprs <- lapply(1:20,
   function(id)
   {
     fname <- file.path(base_dir, id, "express", "results.xprs")
     read_xprs(fname)
   })
-
+```
+```{r,warning=FALSE,cache=TRUE}
 all_cufflinks <- lapply(1:20,
   function(id)
   {
     fname <- file.path(base_dir, id, "cufflinks", "isoforms.fpkm_tracking")
     read_cufflinks(fname, oracle_mfl[[id]])
   })
-
+```
+```{r,warning=FALSE,cache=TRUE}
+all_rsem <- lapply(1:20,
+  function(id)
+  {
+    fname <- file.path(base_dir, id, "rsem", "out.isoforms.results")
+    read_rsem(fname)
+  })
+```
+```{r,warning=FALSE,cache=TRUE}
 all_sailfish <- lapply(1:20,
   function(id)
   {
     fname <- file.path(base_dir, id, "sailfish", "quant.sf")
-    read_sailfish(fname)
+    x <- read_sailfish(fname)
+    x$est_counts <- x$est_counts * (30e6/sum(x$est_counts))
+    x
   })
 ```
+```{r,warning=FALSE}
+all_kallisto <- lapply(1:20,
+  function(id)
+  {
+    fname <- file.path(base_dir, id, "kallisto", "abundance.h5")
+    read_kallisto_h5(fname, FALSE)$abundance
+  })
+```
+
 
 ```{r}
 mr <- lapply(seq_along(all_oracle),
   function(id)
   {
     merge_results(
-      list(all_sailfish[[id]], all_xprs[[id]], all_cufflinks[[id]]),
-      c("sailfish", "express", "cufflinks"),
+      list(all_sailfish[[id]], all_xprs[[id]], all_cufflinks[[id]], all_rsem[[id]],
+           all_kallisto[[id]]),
+      c("sailfish", "express", "cufflinks", "rsem", "kallisto"),
       all_oracle[[id]])
   })
 ```
@@ -86,13 +110,105 @@ no_filt_all <- lapply(mr,
     rbind_all()
 ```
 
+```{r,fig.width=14,fig.height=10}
+no_filt_all %>%
+  mutate(method = sub("est_counts_", "", method)) %>%
+  ggplot(aes(method, spearman, colour = method)) +
+    geom_jitter(aes(shape = factor(method)), alpha = 0.6, size = 3) +
+    ylim(0.85, 1) +
+    ylab("Spearman") +
+    xlab("Method") +
+    scale_x_discrete(labels = c("Cufflinks", "eXpress", "kallisto", "RSEM",
+                                "Sailfish")) +
+    theme_bw(25) +
+    theme(legend.position="none")
+```
+
+```{r,fig.width=14,fig.height=10}
+no_filt_all %>%
+  filter(!grepl("cufflinks", method)) %>%
+  ggplot(aes(method, med_scaled_err, colour = method)) +
+    geom_jitter() +
+    ylim(0, 0.5)
+```
+
+
+## Filtering
+
 ```{r}
-ggplot(no_filt_all, aes(method, spearman)) +
-  geom_boxplot() +
+filt_tpm_1_all <- lapply(mr,
+    function(res)
+    {
+        filtered_summary(res, tpm_oracle >= 1.0)$est_counts
+    }) %>%
+    rbind_all()
+```
+
+```{r,fig.width=14,fig.height=10}
+ggplot(filt_tpm_1_all, aes(method, spearman, colour = method)) +
+  geom_jitter() +
   ylim(0.8, 1)
 ```
 
+```{r,fig.width=14,fig.height=10}
+filt_tpm_1_all %>%
+  filter(!grepl("cufflinks", method)) %>%
+  ggplot(aes(method, med_per_err, colour=method)) +
+    geom_jitter() +
+  ylim(0, 0.2)
+```
+
+# Timings
+
+```{r,echo=FALSE}
+time_base_dir <- "~/kallisto_paper_analysis/simulations/benchmarks/NA12716_7/rsem/sim/30000000/"
+```
+
+```{r,echo=FALSE}
+load_sec <- function(path) {
+  timings <- fromJSON(file = path)
+  data.frame(seconds = timings$wall_clock_times$s) %>%
+    mutate(minutes = seconds / 60.0)
+}
+
+load_timings <- function(nsim, method_name, fname) {
+  lapply(1:nsim,
+    function(id)
+    {
+      load_sec(file.path(time_base_dir, id, fname)) %>%
+        mutate(method = method_name, id = id)
+    }) %>%
+    rbind_all()  
+}
+```
+
+```{r,echo=FALSE}
+sailfish_times <- load_timings(20, "sailfish", "sailfish.json")
+tophat_times <- load_timings(20, "tophat", "tophat.json")
+cufflinks_times <- load_timings(20, "cufflinks", "cufflinks.json")
+bwt2_times <- load_timings(20, "bwt2", "bwt2.json")
+express_times <- load_timings(20, "express", "express.json")
+bwt2_rsem_times <- load_timings(20, "bwt2_rsem", "bwt2_rsem.json")
+rsem_times <- load_timings(20, "rsem", "rsem.json")
+kallisto_times <- load_timings(20, "kallisto", "kallisto.json")
+```
+
+Merge to get pipeline results
+
 ```{r}
-ggplot(no_filt_all, aes(method, med_scaled_err)) +
-  geom_boxplot()
+total_time_express <- sum(bwt2_times$seconds) + max(express_times$seconds)
+total_time_sailfish <- sum(sailfish_times$seconds)
+total_time_cufflinks <- sum(tophat_times$seconds) + sum(cufflinks_times$seconds)
+total_time_rsem <- sum(bwt2_rsem_times$seconds) + sum(rsem_times$seconds)
+total_time_kallisto <- max(kallisto_times$seconds)
+
+total_time_summary <- data.frame(
+  method = c("express", "sailfish", "cufflinks", "rsem", "kallisto"),
+  seconds = c(total_time_express, total_time_sailfish, total_time_cufflinks,
+              total_time_rsem, total_time_kallisto),
+  stringsAsFactors = FALSE) %>%
+  mutate(minutes = seconds / 60) %>%
+  arrange(seconds)
+
+total_time_summary
 ```
