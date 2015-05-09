@@ -52,15 +52,32 @@ all_xprs <- lapply(1:20,
     fname <- file.path(base_dir, id, "express", "results.xprs")
     read_xprs(fname)
   })
+
+get_tot_counts <- function(xprs_res) {
+  ret <- xprs_res %>%
+    mutate(rho = fpkm / sum(fpkm)) %>%
+    mutate(alpha = rho * eff_length  / sum(rho * eff_length)) %>%  
+    filter(uniq_counts == tot_counts, tot_counts > 10) %>%
+    arrange(desc(tot_counts)) %>%
+    mutate(N = uniq_counts / alpha) %>%
+    summarise(N = median(N)) %>%
+    as.data.frame()
+  ret[1,1]
+}
+
+xprs_tot_counts <- lapply(all_xprs, get_tot_counts)  
 ```
+
 ```{r,warning=FALSE,cache=TRUE}
 all_cufflinks <- lapply(1:20,
   function(id)
   {
     fname <- file.path(base_dir, id, "cufflinks", "isoforms.fpkm_tracking")
-    read_cufflinks(fname, oracle_mfl[[id]])
+    read_cufflinks(fname, oracle_mfl[[id]]) %>%
+      mutate(est_counts = est_counts * xprs_tot_counts[[id]])
   })
 ```
+
 ```{r,warning=FALSE,cache=TRUE}
 all_rsem <- lapply(1:20,
   function(id)
@@ -69,7 +86,7 @@ all_rsem <- lapply(1:20,
     read_rsem(fname)
   })
 ```
-```{r,warning=FALSE,cache=TRUE}
+```{r,warning=FALSE}
 all_sailfish <- lapply(1:20,
   function(id)
   {
@@ -79,6 +96,7 @@ all_sailfish <- lapply(1:20,
     x
   })
 ```
+
 ```{r,warning=FALSE}
 all_kallisto <- lapply(1:20,
   function(id)
@@ -126,11 +144,51 @@ no_filt_all %>%
 
 ```{r,fig.width=14,fig.height=10}
 no_filt_all %>%
-  filter(!grepl("cufflinks", method)) %>%
+  mutate(method = sub("est_counts_", "", method)) %>%
+#   filter(!grepl("cufflinks", method)) %>%
   ggplot(aes(method, med_scaled_err, colour = method)) +
+    theme_bw(25) +
+    theme(legend.position="none") +
+    ylab("Relative difference") +
     geom_jitter() +
-    ylim(0, 0.5)
+    ylim(0, 1)
 ```
+
+```{r,fig.width=14,fig.height=10}
+no_filt_all %>%
+  mutate(method = sub("est_counts_", "", method)) %>%
+  group_by(method) %>%
+  summarise(relative_diff = median(med_scaled_err)) %>%
+  mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>%
+  mutate(method = factor(method, labels = c("Bowtie2 +\nRSEM", "kallisto",
+                                            "Bowtie2 +\neXpress", "Sailfish",
+                                            "  TopHat2 +\nCufflinks"))) %>%
+  ggplot(aes(method, relative_diff)) +
+    geom_bar(stat = "identity", fill = "dark grey") +
+    geom_text(aes(label = round(relative_diff, 2), y = relative_diff + 0.05),
+            colour = "black", size = 7) +
+    theme_bw(25) +
+    theme(legend.position="none") +
+    ylab("Median relative difference") +
+    xlab("Method") +
+    ylim(0, 1)
+
+# total_time_summary %>%
+#   ggplot(aes(method, minutes)) +
+#     geom_bar(stat="identity", fill = "dark grey") +
+#     geom_text(aes(label = round(minutes, 2), y = pos),
+#               colour = "black", size = 7) +
+#     xlab("Method") +
+#     ylab("Minutes") +
+#     theme_bw(25) +
+# #     scale_x_discrete(labels = c("kallisto", "Sailfish", "BWT2 +\neXpress",
+# #                               "BWT2 +\nRSEM", "TH2 +\nCufflinks")) +
+# #     scale_fill_manual(values = cbbPalette) +
+#     theme(legend.position = "none")
+
+
+```
+
 
 
 ## Filtering
@@ -152,10 +210,11 @@ ggplot(filt_tpm_1_all, aes(method, spearman, colour = method)) +
 
 ```{r,fig.width=14,fig.height=10}
 filt_tpm_1_all %>%
-  filter(!grepl("cufflinks", method)) %>%
-  ggplot(aes(method, med_per_err, colour=method)) +
+#   filter(!grepl("cufflinks", method)) %>%
+  ggplot(aes(method, med_scaled_err, colour=method)) +
     geom_jitter() +
-  ylim(0, 0.2)
+    theme_bw(25)
+    ylim(0, 0.2)
 ```
 
 # Timings
@@ -191,6 +250,7 @@ express_times <- load_timings(20, "express", "express.json")
 bwt2_rsem_times <- load_timings(20, "bwt2_rsem", "bwt2_rsem.json")
 rsem_times <- load_timings(20, "rsem", "rsem.json")
 kallisto_times <- load_timings(20, "kallisto", "kallisto.json")
+#salmon_times <- load_timings(20, "salmon", "salmon.json")
 ```
 
 Merge to get pipeline results
@@ -203,12 +263,79 @@ total_time_rsem <- sum(bwt2_rsem_times$seconds) + sum(rsem_times$seconds)
 total_time_kallisto <- max(kallisto_times$seconds)
 
 total_time_summary <- data.frame(
-  method = c("express", "sailfish", "cufflinks", "rsem", "kallisto"),
+  method = factor(c("Bowtie2 +\neXpress", "Sailfish", "TopHat2 +\nCufflinks", "Bowtie2 +\nRSEM", "kallisto"),
+                  levels = c("kallisto", "Sailfish", "Bowtie2 +\neXpress", "Bowtie2 +\nRSEM", "TopHat2 +\nCufflinks")),
   seconds = c(total_time_express, total_time_sailfish, total_time_cufflinks,
               total_time_rsem, total_time_kallisto),
   stringsAsFactors = FALSE) %>%
   mutate(minutes = seconds / 60) %>%
   arrange(seconds)
+cbbPalette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
+  "#D55E00", "#CC79A7", "#000000")
+```
 
-total_time_summary
+```{r}
+total_time_summary <- total_time_summary %>%
+  mutate(pos = minutes) %>%
+  mutate(pos = ifelse(method == "TopHat2 +\nCufflinks", minutes * 1.02, pos)) %>%
+  mutate(pos = ifelse(method == "Bowtie2 +\nRSEM", minutes * 1.05, pos)) %>%
+  mutate(pos = ifelse(method == "Sailfish", minutes * 2, pos)) %>%
+  mutate(pos = ifelse(method == "Bowtie2 +\neXpress", minutes * 1.08, pos)) %>%
+  mutate(pos = ifelse(method == "kallisto", minutes * 7, pos))  
+
+total_time_summary %>%
+  ggplot(aes(method, minutes)) +
+    geom_bar(stat="identity", fill = "dark grey") +
+    geom_text(aes(label = round(minutes, 2), y = pos),
+              colour = "black", size = 7) +
+    xlab("Method") +
+    ylab("Minutes") +
+    theme_bw(25) +
+#     scale_x_discrete(labels = c("kallisto", "Sailfish", "BWT2 +\neXpress",
+#                               "BWT2 +\nRSEM", "TH2 +\nCufflinks")) +
+#     scale_fill_manual(values = cbbPalette) +
+    theme(legend.position = "none")
+```
+
+# Look at bootstrap correlation
+
+```{r}
+kal_bs_1 <- file.path(base_dir, 1, "kallisto_bs", "abundance.h5") %>%
+    read_kallisto_h5(TRUE)
+```
+
+```{r}
+mr_1 <- lapply(1,
+  function(id)
+  {
+    merge_results(
+      list(all_sailfish[[id]], all_xprs[[id]], all_cufflinks[[id]], all_rsem[[id]],
+           all_kallisto[[id]], kal_bs_1$bootstrap[[1]], kal_bs_1$bootstrap[[2]]),
+      c("sailfish", "express", "cufflinks", "rsem", "kallisto", "bootstrap1", "bootstrap2"),
+      all_oracle[[id]])
+  })[[1]]
+```
+
+
+
+# Program variance vs bootstrap variance
+
+```{r}
+p_var <- mr[[1]]$m_est_counts %>%
+  filter(!grepl("kallisto", method)) %>%
+  group_by(target_id) %>%
+  summarise(prog_var = var(estimate))
+kal_bs_1_sum <- summarize_bootstrap(kal_bs_1, "est_counts")
+var_join <- inner_join(p_var, data.table(kal_bs_1_sum), by = c("target_id"))
+```
+
+```{r}
+SMALL <- 1e-1
+ggplot(var_join, aes(prog_var, bs_var_est_counts)) +
+  geom_point(alpha = 0.10) +
+  geom_abline(slope = 1, intercept = 0) +
+  scale_x_log10(limits = c(SMALL, 1e6)) +
+  scale_y_log10(limits = c(SMALL, 1e6))
+
+var_join %>% with(cor(prog_var, bs_var_est_counts))
 ```

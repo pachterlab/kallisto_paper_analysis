@@ -13,6 +13,8 @@ rule all:
         KAL_IDX,
         # run kallisto on all GEUVADIS samples
         expand("analysis/kallisto/{sample}/abundance.h5",
+            sample = GEUVADIS_SAMPLES),
+        expand("analysis/kallisto_bs/{sample}/abundance.h5",
             sample = GEUVADIS_SAMPLES)
 
 # generate the kallisto index
@@ -38,4 +40,20 @@ rule kallisto:
         "kallisto quant "
         "-i {KAL_IDX} "
         "-o analysis/kallisto/{wildcards.sample} "
+        "{input[0]} {input[1]}"
+
+# run kallisto and output abundance estimates
+rule kallisto_bs:
+    input:
+        "data/{sample}/{sample}_1.fastq.gz",
+        "data/{sample}/{sample}_2.fastq.gz",
+        KAL_IDX
+    output:
+        "analysis/kallisto_bs/{sample}/abundance.h5" 
+    threads: 1
+    shell:
+        "kallisto quant "
+        "-i {KAL_IDX} "
+        "-o analysis/kallisto_bs/{wildcards.sample} "
+        "-b 30 "
         "{input[0]} {input[1]}"
