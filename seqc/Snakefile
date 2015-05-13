@@ -1,0 +1,120 @@
+ANNO_PRE = 'Homo_sapiens.GRCh37.75.cdna.pc'
+ANNO_FA = '../index/{0}.fa'.format( ANNO_PRE )
+KAL_IDX = '../index/{0}.kidx'.format( ANNO_PRE )
+
+DEEP_A_FNAME = "info/deepest_a_run_id_only.txt"
+
+DEEP_A = []
+with open(DEEP_A_FNAME, 'r') as in_handle:
+    for line in in_handle:
+        DEEP_A.append(line.replace("\n", ""))
+
+SAMP_5_FNAME = "info/deepest_a_4_run_id_only.txt"
+SAMP_5 = []
+with open(SAMP_5_FNAME, 'r') as in_handle:
+    for line in in_handle:
+        SAMP_5.append(line.replace("\n", ""))
+
+N_READS=30000000
+N_SUB = [i for i in range(1, 41)]
+
+rule all:
+    input:
+        #expand('data/{id}/{id}_1.fastq.gz', id = DEEP_A ),
+        #expand('data/{id}/{id}_2.fastq.gz', id = DEEP_A ),
+        expand('data/merged_{left}.fastq.gz', left  = [1, 2]),
+        expand('sub/ss{id}/ss{id}_{left}.fastq', id = N_SUB, left = [1, 2]),
+        expand('sub/ss{id}/ss{id}_{left}.fastq', id = N_SUB, left = [1, 2]),
+        'results/bootstrap9999/abundance.h5',
+        'results/bootstrap9998/abundance.h5',
+        'results/bootstrap9997/abundance.h5',
+        expand('results/ss{id}/abundance.h5', id = N_SUB)
+
+rule fastq_dump:
+#    input:
+#        'data/{id}'
+    output:
+        'data/{id}/{id}_1.fastq.gz',
+        'data/{id}/{id}_2.fastq.gz'
+    benchmark:
+        'benchmarks/{id}/fastq_dump.json'
+    threads: 1
+    run:
+        shell('fastq-dump '
+        '--split-files '
+        '-O {input} '
+        '{wildcards.id}')
+        shell('gzip {output[0]}')
+        shell('gzip {output[1]}')
+
+def merge_deep_a(wildcards):
+    return ["data/{0}/{0}_{1}.fastq.gz".format(i, wildcards['left']) for i in SAMP_5]
+
+rule merge:
+    input: merge_deep_a
+    output:
+        'data/merged_{left}.fastq.gz'
+    threads: 1
+    shell:
+        'zcat {input} | gzip -c  > {output} '
+
+########################################################################
+# subsample stuff
+########################################################################
+
+
+rule subsample_left:
+    input:
+        'data/merged_1.fastq.gz'
+    output:
+        'sub/ss{id}/ss{id}_1.fastq'
+    threads: 1
+    shell:
+        'seqtk sample '
+        '-s {wildcards.id} '
+        '{input} ' + str(N_READS) + ' '
+        '> sub/ss{wildcards.id}/ss{wildcards.id}_1.fastq'
+
+rule subsample_right:
+    input:
+        'data/merged_2.fastq.gz'
+    output:
+        'sub/ss{id}/ss{id}_2.fastq'
+    threads: 1
+    shell:
+        'seqtk sample '
+        '-s {wildcards.id} '
+        '{input} ' + str(N_READS) + ' '
+        '> sub/ss{wildcards.id}/ss{wildcards.id}_2.fastq'
+
+
+########################################################################
+# quantify
+########################################################################
+
+rule kallisto_ss:
+    input:
+        'sub/ss{id}/ss{id}_1.fastq',
+        'sub/ss{id}/ss{id}_2.fastq'
+    output:
+        'results/ss{id}/abundance.h5'
+    threads: 1
+    shell:
+        'kallisto quant '
+        '-i ' + KAL_IDX + ' '
+        '-o results/ss{wildcards.id} '
+        '{input[0]} {input[1]}'
+
+rule kallisto_bootstrap:
+    input:
+        'sub/ss{id}/ss{id}_1.fastq',
+        'sub/ss{id}/ss{id}_2.fastq'
+    output:
+        'results/bootstrap{id}/abundance.h5'
+    threads: 1
+    shell:
+        'kallisto quant '
+        '-i ' + KAL_IDX + ' '
+        '-o results/bootstrap{wildcards.id} '
+        '-b 40 '
+        '{input[0]} {input[1]}'
