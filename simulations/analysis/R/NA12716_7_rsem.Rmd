@@ -339,3 +339,115 @@ ggplot(var_join, aes(prog_var, bs_var_est_counts)) +
 
 var_join %>% with(cor(prog_var, bs_var_est_counts))
 ```
+
+# Paralog analysis
+
+
+```{r}
+dgd <- fread("../dgd_Hsa_all_v.tsv", header=TRUE)
+dgd_unique <- dgd %>%
+  select(gene_id = ENS_ID) %>%
+  distinct()
+
+```{r}
+library(biomaRt)
+mart <- useMart(biomart = "ensembl", dataset
+      = "hsapiens_gene_ensembl")
+gene_names <- getBM(attributes
+      = c("ensembl_transcript_id","ensembl_gene_id"), mart
+      = mart)
+```
+
+```{r}
+gene_names <- gene_names %>%
+  rename(target_id = ensembl_transcript_id, gene_id = ensembl_gene_id) %>%
+  data.table()
+dgd_unique <- dgd_unique %>%
+  data.table() %>%
+  inner_join(gene_names, by = "gene_id")
+mr_paralog <- lapply(mr,
+                     function(x)
+                       {
+                        x$m_est_counts <- inner_join(x$m_est_counts, dgd_unique, by = "target_id")
+                        x
+                       })
+```
+
+sanity check:
+
+```{r}
+n_pa
+n_paralog_trans <- dplyr::select(mr_paralog[[1]]$m_est_counts, target_id) %>%
+  distinct() %>%
+  nrow()
+```
+
+```{r}
+# nf - no filter
+nf_paralog <- lapply(mr_paralog,
+    function(res)
+    {
+        filtered_summary(res)$est_counts
+    }) %>%
+    rbind_all()
+```
+
+```{r}
+
+nf_paralog %>%
+  mutate(method = sub("est_counts_", "", method)) %>%
+#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>% 
+  mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
+#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>%
+  mutate(method = factor(method, labels = c(
+                                            "TopHat2\n+\nCufflinks",
+                                            "Sailfish",
+                                            "Bowtie2\n+\neXpress",
+                                            "kallisto",
+                                            "Bowtie2\n+\nRSEM"
+                                            ))) %>% 
+  group_by(method) %>%
+  summarise(med_rel_diff = mean(med_scaled_err)) %>%
+#   filter(!grepl("cufflinks", method)) %>%
+  ggplot(aes(method, med_rel_diff)) +
+    geom_bar(stat="identity", fill = "black") +
+    geom_text(aes(label = round(med_rel_diff, 2),
+                  y = med_rel_diff + 0.06),
+              colour = "black", size = 5.5) +
+    xlab("") + 
+    theme_bw() +
+    ylab("median relative difference") +  
+    theme(legend.position = "none",
+          axis.text.y=element_text(size=16),
+          axis.text.x=element_text(size=17),
+          axis.title.y=element_text(size=20, vjust=1),
+          axis.title.x=element_text(size=20) ) +
+      ylim(0, 1)
+```
+
+```{r}
+which_paralogs <- mr_paralog[[1]]$m_est_counts %>%
+  dplyr::select(target_id) %>%
+  distinct() %>%
+  mutate(paralog = TRUE)
+
+counts_dist <- mr[[1]]$m_est_counts %>%
+  dplyr::select(target_id, oracle) %>%
+  distinct() %>%
+  left_join(which_paralogs, by = c("target_id"))
+
+counts_dist <- counts_dist %>%
+  mutate(paralog = ifelse(is.na(paralog), FALSE, TRUE)) %>%
+  mutate(lab = ifelse(paralog, "Duplicated Genes Database", "Remaining transcripts")) %>%
+  mutate(lab = factor(lab))
+```
+
+```{r}
+ggplot(counts_dist, aes(oracle)) +
+  geom_histogram(aes(y = ..density..)) +
+  scale_x_log10() +
+  facet_wrap(~ lab) +
+  theme_bw(20) +
+  xlab("true counts")
+  
+```
