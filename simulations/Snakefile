@@ -5,6 +5,7 @@ ANNO = "../annotation"
 ANNO_PREFIX = "Homo_sapiens.GRCh37.75.cdna.pc"
 ANNO_FA = "{0}/{1}.fa".format( ANNO, ANNO_PREFIX )
 ANNO_GTF = "{0}/Homo_sapiens.GRCh37.75.sub.gtf".format( ANNO )
+ANNO_TRANS_GTF = "{0}/Homo_sapiens.GRCh37.75.sub_trans_only.gtf".format( ANNO )
 
 # genomes
 GENOME_FA = "../GRCh37_75/Homo_sapiens.GRCh37.75.dna.primary_assembly.fa"
@@ -17,6 +18,9 @@ RSEM_REF = "{0}/{1}_rsem/ref".format( IDX, ANNO_PREFIX )
 KAL_IDX = "{0}/{1}.kidx".format( IDX, ANNO_PREFIX )
 SALMON_IDX = "{0}/{1}_salmon_idx".format( IDX, ANNO_PREFIX )
 SAILFISH_IDX = "{0}/{1}_sailfish_idx".format( IDX, ANNO_PREFIX )
+
+# binaries
+FLUX = "~/Downloads/flux-capacitor-1.6.1/bin/flux-capacitor"
 
 N_THREADS = 20
 
@@ -32,7 +36,9 @@ rule all:
 #        # generate simulations using RSEM
 #        expand(HUMAN_PRE + "/rsem/sim/30000000/{sims}_1.fq.gz", sims = SIMS_LIST),
 #        # quantify using kallisto
-#        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto/expression.h5", id = SIMS_LIST ),
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto/abundance.h5", id = SIMS_LIST ),
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto_bs/abundance.h5", id = [1] ),
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto_soft/abundance.h5", id = SIMS_LIST )
 #        # quantify using salmon
 #        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/salmon/quant.sf", id = SIMS_LIST ),
 #        # quantify using eXpress
@@ -40,11 +46,15 @@ rule all:
         # TopHat on simulations
         #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/tophat/accepted_hits.bam", id = SIMS_LIST )
         # Cufflinks on simulations
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/cufflinks/isoforms.fpkm_tracking", id = SIMS_LIST ),
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/cufflinks/isoforms.fpkm_tracking", id = SIMS_LIST ),
         #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/alignments/bwt2_rsem.bam", id = [6] )
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/rsem/out.isoforms.results", id = [6] ),
-        SAILFISH_IDX,
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/sailfish/quant.sf", id = SIMS_LIST )
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/rsem/out.isoforms.results", id = SIMS_LIST ),
+        #SAILFISH_IDX,
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/sailfish/quant.sf", id = SIMS_LIST ),
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/htseq/gene_counts.txt", id = SIMS_LIST ),
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/flux/output", id = SIMS_LIST[0] )
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto_sens/abundance.h5", id = [2] ),
+        #expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/bwt2_sens/bwt2_sens.txt", id = [2] )
 
 ########################################################################
 # INDICES
@@ -82,6 +92,15 @@ rule sailfish_index:
         '-t ' + ANNO_FA + ' '
         '-o {output} '
         '-k 21'
+
+rule kallisto_index:
+    output:
+        KAL_IDX
+    threads: 1
+    shell:
+        'kallisto index '
+        '-i ' + KAL_IDX + ' ' +
+        ANNO_FA
 
 ########################################################################
 # REAL DATA TO ACT AS SEED FOR SIMULATIONS
@@ -330,15 +349,119 @@ rule express_rsem_sim:
 rule kallisto_rsem_sim:
     input:
         "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
-        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz"
+        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
+        KAL_IDX
     output:
-        "{sample}/rsem/sim/{nreads}/{sim_id}/kallisto/expression.h5"
+        "{sample}/rsem/sim/{nreads}/{sim_id}/kallisto/abundance.h5"
     benchmark:
         "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/kallisto.json"
     threads: 1
     message:
         "kallisto quant on {input[0]} {output}"
     shell:
-        "kallisto quant -i " + KAL_IDX + " "
+        "kallisto quant -i {KAL_IDX} "
         "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}"
         "/{wildcards.sim_id}/kallisto {input[0]} {input[1]}"
+
+# Run kallisto on RSEM simulations
+rule kallisto_sensitivity_rsem_sim:
+    input:
+        "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
+        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
+        KAL_IDX
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/kallisto_sens/abundance.h5"
+    threads: 1
+    message:
+        "kallisto quant on {input[0]} {output}"
+    shell:
+        "/home/pmelsted/kallisto/sensitivity/src/kallisto quant -i {KAL_IDX} "
+        "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}"
+        "/{wildcards.sim_id}/kallisto_sens {input[0]} {input[1]} > "
+        "{wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/kallisto_sens/sens.txt"
+
+rule bwt_sens_rsem_sim:
+    input:
+        rules.bwt2_express_rsem_sim.output
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/bwt2_sens/bwt2_sens.txt"
+    threads: 1
+    message:
+        "bwt2 sensitivity"
+    shell:
+        "samtools view {input} | cut -f 1,3 > {output}"
+
+# Run kallisto on RSEM simulations
+rule kallisto_rsem_sim_bs:
+    input:
+        "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
+        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
+        KAL_IDX
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/kallisto_bs/abundance.h5"
+    benchmark:
+        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/kallisto_bs.json"
+    threads: 1
+    message:
+        "kallisto quant w/ bs on {input[0]} {output}"
+    shell:
+        "kallisto quant -i {KAL_IDX} "
+        "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}"
+        "/{wildcards.sim_id}/kallisto_bs "
+        "-b 100 "
+        "{input[0]} {input[1]}"
+
+# Run kallisto on RSEM simulations
+rule kallisto_soft_rsem_sim:
+    input:
+        "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
+        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
+        KAL_IDX
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/kallisto_soft/abundance.h5"
+    benchmark:
+        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/kallisto_soft.json"
+    threads: 1
+    message:
+        "kallisto quant w/ bs on {input[0]} {output}"
+    shell:
+        "~/kallisto_soft/kallisto quant -i {KAL_IDX} "
+        "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}"
+        "/{wildcards.sim_id}/kallisto_soft "
+        "{input[0]} {input[1]}"
+
+rule flux_rsem_sim:
+    input:
+        rules.tophat_rsem_sim.output,
+        ANNO_TRANS_GTF
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/flux/output"
+    benchmark:
+        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/flux.json"
+    threads: N_THREADS
+    shell:
+        FLUX + " "
+        "-a {ANNO_TRANS_GTF} "
+        "-i {input[0]} "
+        "--threads {threads} "
+        "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/flux/output "
+
+
+########################################################################
+# Gene level analysis
+########################################################################
+
+rule htseq_rsem_sim:
+    input:
+        rules.tophat_rsem_sim.output,
+        ANNO_GTF
+    output:
+        "{sample}/rsem/sim/{nreads}/{sim_id}/htseq/gene_counts.txt"
+    benchmark:
+        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/htseq_gene.json"
+    threads: 1
+    shell:
+        "htseq-count --stranded=no "
+        "-f bam "
+        "{input[0]} {input[1]} >"
+        "{output}"
