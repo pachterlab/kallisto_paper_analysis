@@ -9,7 +9,6 @@ output:
 library("data.table")
 library("dplyr")
 library("reshape2")
-library("sleuth")
 library("ggplot2")
 library("rjson")
 ```
@@ -19,7 +18,7 @@ library("rjson")
 Let's first get info on all the data
 
 ```{r,echo=FALSE}
-base_dir <- "~/kallisto_paper_analysis/simulations/NA12716_7/rsem/sim/30000000"
+base_dir <- "../../NA12716_7/rsem/sim/30000000"
 ```
 
 Helper function for cufflinks since it doesn't output effective length:
@@ -29,6 +28,101 @@ get_oracle_mean_fl <- function(oracle) {
   tab <- table(oracle$length - oracle$eff_length)
   as.numeric(names(which(tab == max(tab)))[1])
 }
+```
+
+Convenience functions for loading different datasets
+```{r}
+read_xprs <- function(fname) {
+    xprs <- fread(fname, header = TRUE, stringsAsFactors = FALSE,
+        data.table = TRUE)
+    xprs
+}
+
+read_sailfish <- function(fname) {
+    sf <- fread(fname, header = FALSE, skip = 5, stringsAsFactors = FALSE,
+        data.table = FALSE)
+    colnames(sf) <- c("target_id", "length", "tpm", "rpkm", "kpkm", "EstimatedNumKmers", "est_counts")
+    sf %>%
+      select(target_id, tpm, est_counts)
+}
+
+tpm_to_alpha <- function(tpm, eff_len) {
+  stopifnot(length(tpm) == length(eff_len))
+
+  alpha <- (tpm * eff_len) / 1e6
+  alpha <- alpha / sum(alpha)
+
+  alpha
+}
+
+read_rsem <- function(fname) {
+  read.table(fname, header = TRUE, stringsAsFactors = FALSE) %>%
+    rename(target_id = transcript_id,
+      est_counts = expected_count,
+      tpm = TPM, eff_len = effective_length) %>%
+    select(-gene_id, -FPKM, -IsoPct)
+}
+
+read_cufflinks <- function(fname, mean_frag_len) {
+  data <- data.table::fread(fname, header = TRUE)
+
+  data <- data %>%
+    mutate(tpm = FPKM * 1e6/ sum(FPKM),
+      est_counts = tpm_to_alpha(tpm, length - mean_frag_len))
+
+  data %>%
+    select(target_id = tracking_id, tpm, est_counts)
+}
+
+counts_to_tpm <- function(est_counts, eff_len) {
+  stopifnot( length(eff_len) == length(est_counts) )
+
+  which_valid <- which(eff_len > 0)
+
+  num <- (est_counts / eff_len)
+  num[-which_valid] <- 0
+  denom <- sum(num)
+
+  (1e6 * num) / denom
+}
+
+read_kallisto_h5 <- function(fname, read_bootstrap = TRUE) {
+  stopifnot(is(fname, "character"))
+
+  fname <- path.expand(fname)
+
+  if (!file.exists(fname)) {
+    stop(paste0("Can't file file: '", fname, "'"))
+  }
+
+  target_id <- as.character(rhdf5::h5read(fname, "aux/ids"))
+  abund <- data.frame(target_id = target_id, stringsAsFactors = FALSE)
+  abund$est_counts <- as.numeric(rhdf5::h5read(fname, "est_counts"))
+  abund$eff_len <- as.numeric(rhdf5::h5read(fname, "aux/eff_lengths"))
+  abund$len <- as.numeric(rhdf5::h5read(fname, "aux/lengths"))
+
+  bs_samples <- list()
+  if (read_bootstrap) {
+    num_bootstrap <- as.integer(rhdf5::h5read(fname, "aux/num_bootstrap"))
+    if (num_bootstrap > 0) {
+      cat("Found ", num_bootstrap, " bootstrap samples\n")
+      bs_samples <- lapply(0:(num_bootstrap[1]-1), function(i)
+        {
+          .read_bootstrap_hdf5(fname, i, abund)
+        })
+    } else {
+      cat("No bootstrap samples found\n ")
+    }
+  }
+
+  abund$tpm <- counts_to_tpm(abund$est_counts, abund$eff_len)
+
+  invisible(structure(
+      list(abundance = abund,
+        bootstrap = bs_samples),
+      class = "kallisto"))
+}
+
 ```
 
 Load all data:
@@ -46,12 +140,12 @@ all_oracle <- lapply(1:20,
 oracle_mfl <- lapply(all_oracle, get_oracle_mean_fl)
 ```
 ```{r,warning=FALSE,cache=TRUE}
-all_xprs <- lapply(1:20,
-  function(id)
-  {
-    fname <- file.path(base_dir, id, "express", "results.xprs")
-    read_xprs(fname)
-  })
+  all_xprs <- lapply(1:20,
+    function(id)
+    {
+      fname <- file.path(base_dir, id, "express", "results.xprs")
+      read_xprs(fname)
+    })
 
 get_tot_counts <- function(xprs_res) {
   ret <- xprs_res %>%
@@ -66,6 +160,94 @@ get_tot_counts <- function(xprs_res) {
 }
 
 xprs_tot_counts <- lapply(all_xprs, get_tot_counts)  
+
+
+
+# merge results
+merge_results <- function(exp_list, exp_labels, oracle) {
+  stopifnot( is(exp_list, "list") )
+  stopifnot( length(exp_list) == length(exp_labels) )
+
+  exp_list <- lapply(seq_along(exp_list),
+    function(i)
+    {
+      res <- exp_list[[i]] %>%
+        select(target_id, tpm, est_counts) %>%
+        data.table::data.table()
+      data.table::setnames(res, "tpm", paste0("tpm_", exp_labels[i]))
+      data.table::setnames(res, "est_counts", paste0("est_counts_", exp_labels[i]))
+    })
+
+  oracle <- oracle %>%
+    rename(tpm_oracle = tpm, est_counts_oracle = counts)
+
+  all_res <- Reduce(function(x, y) inner_join(x, y, by = c("target_id")), exp_list)
+
+
+  melt_by <- function(data, unit_by) {
+    m_unit <- data %>%
+      select(target_id, starts_with(unit_by)) %>%
+      reshape2::melt(id.vars = "target_id", variable.name = "method")
+    ret <- data.table::data.table(oracle) %>%
+      select(target_id, starts_with(unit_by)) %>%
+      inner_join(data.table::data.table(m_unit), by = "target_id") %>%
+      rename(estimate = value)
+    data.table::setnames(ret, paste0(unit_by, "_oracle"), "oracle")
+    ret
+  }
+
+  m_tpm <- melt_by(all_res, "tpm")
+  m_est_counts <- melt_by(all_res, "est_counts")
+
+  all_res <- all_res %>%
+    inner_join(data.table::data.table(oracle), by = "target_id")
+
+  structure(list(all_data = all_res, m_tpm = m_tpm, m_est_counts = m_est_counts),
+    class = "merged_res")
+}
+
+filtered_summary <- function(mres, filter_exp) {
+  stopifnot( is(mres, "merged_res") )
+  do_filter <- if (missing(filter_exp)) {
+    FALSE
+  } else {
+    filter_exp <- deparse(substitute(filter_exp))
+    filtered_ids <- mres$all_data %>%
+      filter_(.dots = list(filter_exp)) %>%
+      select(target_id)
+    TRUE
+  }
+
+  both_res <- lapply(list(mres$m_tpm, mres$m_est_counts),
+    function(res)
+    {
+      if (do_filter) {
+        res <- data.table(res) %>%
+          inner_join(data.table(filtered_ids), by = c("target_id"))
+      }
+
+      res %>%
+        group_by(method) %>%
+        summarise(
+          pearson = cor(estimate, oracle, method = "pearson"),
+          spearman = cor(estimate, oracle, method = "spearman"),
+          med_scaled_err = median(abs(scaled_error(estimate, oracle)),
+              na.rm = TRUE),
+          med_per_err = median(abs(percent_error(estimate, oracle)))
+          )
+    })
+
+  setNames(both_res, c("tpm", "est_counts"))
+}
+
+scaled_error <- function(estimate, truth) {
+  2 *(estimate - truth)  / (estimate + truth)
+}
+
+percent_error <- function(estimate, truth) {
+  (estimate - truth) / truth
+}
+
 ```
 
 ```{r,warning=FALSE,cache=TRUE}
@@ -107,7 +289,9 @@ Let's correct them with the true total counts:
 ```{r}
 all_sailfish <- lapply(all_sailfish, function(x) {
   #x$est_counts <- x$est_counts * (30e6/sum(x$est_counts))
+  # each end of read is processed independently
   x$est_counts <- x$est_counts  / 2
+  
   x
 })  
 ```
@@ -170,7 +354,7 @@ no_filt_all %>%
           axis.text.x=element_text(size=17),
           axis.title.y=element_text(size=20, vjust=1),
           axis.title.x=element_text(size=20) ) +
-      ylim(0, 1)
+      ylim(0, .6)
 ```
 
 ```{r}
@@ -202,7 +386,7 @@ no_filt_tpm %>%
           axis.text.x=element_text(size=17),
           axis.title.y=element_text(size=20, vjust=1),
           axis.title.x=element_text(size=20) ) +
-      ylim(0, 1)
+      ylim(0, 0.6)
 ```
 
 
@@ -222,7 +406,7 @@ filt_tpm_1_all <- lapply(mr,
 # Timings
 
 ```{r,echo=FALSE}
-time_base_dir <- "~/kallisto_paper_analysis/simulations/benchmarks/NA12716_7/rsem/sim/30000000/"
+time_base_dir <- "../../benchmarks/NA12716_7/rsem/sim/30000000/"
 ```
 
 ```{r}
