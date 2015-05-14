@@ -1,0 +1,6 @@
+*.fq.gz
+*~
+*.fastq.gz
+*.zip
+*.pdf
+*.RData
