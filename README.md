@@ -13,4 +13,8 @@ This repo contains all the analysis to reproduce the results in the kallisto pap
 ### Directories
 
 - `geuvadis` - contains all the GEUVADIS analysis
+- `personalized_simulation` - contains the allele-specific expression
+  simulations
+- `seqc` - contails the analysis for the SEQC dataset used in the bootstrap
+  analysis
 - `simulations` - contains the simulations

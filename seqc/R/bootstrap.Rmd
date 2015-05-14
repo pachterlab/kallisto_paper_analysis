@@ -1,0 +1,140 @@
+---
+title: "SEQC bootstrap estimates"
+output:
+  html_document
+---
+
+```{r}
+library("sleuth")
+base_dir <- "../results"
+```
+
+Load subsamples
+
+```{r,cache=TRUE,echo=FALSE}
+all_ss_fname <- Sys.glob("../results/ss*/abundance.h5")
+all_ss <- lapply(all_ss_fname, read_kallisto_h5, read_bootstrap = FALSE)
+all_ss_id <- all_ss_fname %>%
+  sub("../results/", "", .) %>%
+  sub("/abundance.h5", "", .)
+all_ss_id <- data.frame(sample = all_ss_id, condition = c("A", "B"))
+
+
+all_ss_sleuth <- new_sleuth(all_ss, all_ss_id, ~condition)
+
+ss_summary <- all_ss_sleuth$obs_norm %>%
+  group_by(target_id) %>%
+  summarise(
+    mean_tpm = mean(tpm),
+    sd_tpm = sd(tpm),
+    var_tpm = var(tpm),
+    cv_tpm = sd_tpm / mean_tpm,
+    mean_est_counts = mean(est_counts),
+    sd_est_counts = sd(est_counts),
+    var_est_counts = var(est_counts),
+    cv_est_counts = sd_est_counts / mean_est_counts
+    )
+```
+
+Load bootstrap
+
+```{r,cache=TRUE,echo=FALSE}
+bs_fname <- "../results/bootstrap9999/abundance.h5"
+bs_kal <- read_kallisto_h5(bs_fname, read_bootstrap = TRUE)
+
+
+bs_sleuth_kal_tpm <- summarize_bootstrap(bs_kal, "tpm")
+bs_sleuth_kal_counts <- summarize_bootstrap(bs_kal, "est_counts")
+bs_kal_join <- inner_join(bs_sleuth_kal_tpm, bs_sleuth_kal_counts, by = c("target_id"))
+
+summary_joined <- bs_kal_join %>%
+  inner_join(ss_summary, by = c("target_id"))
+```
+
+# Variance estimation
+
+
+```{r,cache=TRUE,echo=FALSE}
+sum_joined_counts <- bs_kal$abundance %>%
+  select(target_id, est_counts) %>%
+  inner_join(summary_joined, by = "target_id")
+
+e <- ecdf(sum_joined_counts$est_counts[sum_joined_counts$est_counts != 0])
+sum_joined_counts <- sum_joined_counts %>%
+  mutate(cdf = e(est_counts)) %>%
+  mutate(exp_group = cut(cdf, 10))
+sum_joined_counts <- sum_joined_counts %>%
+  mutate(exp_group = as.character(exp_group)) %>%
+  mutate(exp_group = ifelse(est_counts == "0", "0", exp_group))
+sum_joined_counts[sum_joined_counts$exp_group == "(-0.001,0.1]",]$exp_group = "(0,0.1]"
+sum_joined_counts$exp_group = factor(sum_joined_counts$exp_group)
+sum_joined_counts$exp_group = relevel(sum_joined_counts$exp_group, "0")
+sum_joined_counts <- mutate(sum_joined_counts, `Expression decile` = exp_group)
+var_cor <- with(summary_joined, cor(var_est_counts, bs_var_est_counts))
+```
+
+```{r,echo=FALSE,fig.width=14,fig.height=14}
+cor_exp <- paste0("Correlation: ", round(var_cor, 3))
+SMALL <- 0.1
+ggplot(sum_joined_counts,
+  aes(bs_var_est_counts + SMALL, var_est_counts + SMALL)) +
+  geom_point(aes(colour = `Expression decile`), alpha = 0.2) +
+  geom_abline(intercept = 0, slope = 1, size=0.85, alpha=0.3) +
+  scale_shape_discrete(name="Expression decile") +
+  theme_bw() +
+  coord_fixed() +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  scale_x_log10(limits = c(SMALL, 1e6)) +
+  scale_y_log10(limits = c(SMALL, 1e6)) +
+  xlab("bootstrap variance") +
+  ylab("subsampled variance") +
+  annotate("text", x = 5e4, y = 4e00, label = cor_exp) +
+  theme(
+    axis.text.y=element_text(size=14),
+    axis.text.x=element_text(size=14),
+    axis.title.y=element_text(size=16, vjust=1),
+    axis.title.x=element_text(size=16))
+#ggsave("~/Dropbox/kallisto/kallisto_paper/figures/seqc/rainbow.png")
+```
+
+
+# Mean-variance relationship
+
+
+Subsampled:
+
+```{r,echo=FALSE,fig.width=14,fig.height=14}
+SMALL <- 1e-1
+cor_pv_ss <- with(summary_joined, cor(mean_est_counts, var_est_counts))
+log_pv_ss <- ggplot(summary_joined, aes(mean_est_counts, var_est_counts)) +
+  geom_point(alpha = 0.1) +
+  #stat_density2d(aes(fill = ..level..), geom = "polygon", alpha = 0.20) +
+  geom_abline(intercept = 0, slope = 1, size=0.85, alpha=1, colour="blue") +
+  scale_x_log10(limits = c(SMALL, 1e4)) +
+  scale_y_log10(limits = c(SMALL, 1e4)) +
+  theme_bw(20) +
+  coord_fixed() +
+  xlab("subsampled mean") +
+  ylab("subsampled variance") +
+  annotate("text", x = 500, y = 1, label = paste0("Correlation: ", round(cor_pv_ss, 4)))
+log_pv_ss
+```
+
+Bootstrapped:
+
+```{r,echo=FALSE,fig.width=14,fig.height=14}
+SMALL <- 1e-1
+cor_pv_bs <- with(summary_joined,
+  cor(bs_mean_est_counts, bs_var_est_counts))
+log_pv_bs <- ggplot(summary_joined, aes(bs_mean_est_counts, bs_var_est_counts)) +
+  geom_point(alpha = 0.1) +
+  geom_abline(slope = 1, intercept = 0, colour = "blue") +
+  theme_bw(20) +
+  scale_x_log10(limits = c(SMALL, 1e4)) +
+  scale_y_log10(limits = c(SMALL, 1e4)) +
+  xlab("bootstrap mean") +
+  ylab("bootstrap variance") +
+  annotate("text", x = 500, y = 1, label = paste0("Correlation: ",
+    round(cor_pv_bs, 4)))
+log_pv_bs
+```
