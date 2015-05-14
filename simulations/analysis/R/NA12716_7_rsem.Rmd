@@ -92,9 +92,24 @@ all_sailfish <- lapply(1:20,
   {
     fname <- file.path(base_dir, id, "sailfish", "quant.sf")
     x <- read_sailfish(fname)
-    x$est_counts <- x$est_counts * (30e6/sum(x$est_counts))
     x
   })
+```
+
+Sailfish counts look odd:
+```{r}
+lapply(all_sailfish, function(x) sum(x$est_counts)) %>%
+  unlist()
+```
+
+Let's correct them with the true total counts:
+
+```{r}
+all_sailfish <- lapply(all_sailfish, function(x) {
+  #x$est_counts <- x$est_counts * (30e6/sum(x$est_counts))
+  x$est_counts <- x$est_counts  / 2
+  x
+})  
 ```
 
 ```{r,warning=FALSE}
@@ -133,13 +148,13 @@ no_filt_all <- lapply(mr,
 no_filt_all %>%
   mutate(method = sub("est_counts_", "", method)) %>%
   mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
-  mutate(method = factor(method, labels = c(
-                                            "TopHat2\n+\nCufflinks",
-                                            "Sailfish",
-                                            "Bowtie2\n+\neXpress",
-                                            "kallisto",
-                                            "Bowtie2\n+\nRSEM"
-                                            ))) %>% 
+#   mutate(method = factor(method, labels = c(
+#                                             "TopHat2\n+\nCufflinks",
+#                                             "Sailfish",
+#                                             "Bowtie2\n+\neXpress",
+#                                             "kallisto",
+#                                             "Bowtie2\n+\nRSEM"
+#                                             ))) %>% 
   group_by(method) %>%
   summarise(med_rel_diff = mean(med_scaled_err)) %>%
   ggplot(aes(method, med_rel_diff)) +
@@ -172,17 +187,8 @@ Looking at TPM:
 ```{r,fig.width=14,fig.height=10}
 no_filt_tpm %>%
   mutate(method = sub("tpm_", "", method)) %>%
-  mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
-  mutate(method = factor(method, labels = c(
-                                            "TopHat2\n+\nCufflinks",
-                                            "Sailfish",
-                                            "Bowtie2\n+\neXpress",
-                                            "kallisto",
-                                            "Bowtie2\n+\nRSEM"
-                                            ))) %>% 
   group_by(method) %>%
   summarise(med_rel_diff = mean(med_scaled_err)) %>%
-#   filter(!grepl("cufflinks", method)) %>%
   ggplot(aes(method, med_rel_diff)) +
     geom_bar(stat="identity", fill = "black") +
     geom_text(aes(label = round(med_rel_diff, 2),
@@ -211,11 +217,66 @@ filt_tpm_1_all <- lapply(mr,
     rbind_all()
 ```
 
+
+
 # Timings
 
 ```{r,echo=FALSE}
 time_base_dir <- "~/kallisto_paper_analysis/simulations/benchmarks/NA12716_7/rsem/sim/30000000/"
 ```
+
+```{r}
+mr_upd <- lapply(mr,
+       function(res) {
+         res$all_data <- filter(res$all_data, length >= 500)
+         res$m_est_counts <- inner_join(
+           dplyr::select(res$all_data, target_id),
+           res$m_est_counts,
+           by = "target_id")
+          res$m_tpm <- inner_join(
+           dplyr::select(res$all_data, target_id),
+           res$m_tpm,
+           by = "target_id")
+         
+         res$m_tpm %>%
+           group_by(method) %>%
+           mutate(oracle = oracle / sum(oracle), estimate / sum(estimate))
+         res
+       })
+```
+
+
+```{r}
+filt_length <- lapply(mr_upd,
+    function(res)
+    {
+        filtered_summary(res)$tpm
+    }) %>%
+    rbind_all()
+```
+
+```{r}
+filt_length %>%
+  mutate(method = sub("tpm_", "", method)) %>%
+  group_by(method) %>%
+  summarise(med_rel_diff = mean(med_scaled_err)) %>%
+  ggplot(aes(method, med_rel_diff)) +
+    geom_bar(stat="identity", fill = "black") +
+    geom_text(aes(label = round(med_rel_diff, 2),
+                  y = med_rel_diff + 0.06),
+              colour = "black", size = 5.5) +
+    xlab("") + 
+    theme_bw() +
+    ylab("median relative difference") +  
+    theme(legend.position = "none",
+          axis.text.y=element_text(size=16),
+          axis.text.x=element_text(size=17),
+          axis.title.y=element_text(size=20, vjust=1),
+          axis.title.x=element_text(size=20) ) +
+      ylim(0, 1)
+```
+
+
 
 ```{r,echo=FALSE}
 load_sec <- function(path) {
@@ -398,4 +459,14 @@ ggplot(counts_dist, aes(oracle)) +
   theme_bw(20) +
   xlab("true counts")
   
+```
+
+```{r}
+hi <- dplyr::select(all_kallisto[[1]], target_id, eff_len) %>%
+  inner_join(dplyr::select(all_rsem[[1]], target_id, rsem_eff_len = eff_len), by = 'target_id')
+
+ggplot(hi, aes(eff_len, rsem_eff_len)) +
+  geom_point() +
+  xlim(0, 250) +
+  ylim(0, 250)
 ```
