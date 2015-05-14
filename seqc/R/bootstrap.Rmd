@@ -5,13 +5,266 @@ output:
 ---
 
 ```{r}
-library("sleuth")
+library("dplyr")
+library("tidyr")
+library("lazyeval")
+library("DESeq2")
+library("ggplot2")
 base_dir <- "../results"
 ```
+
+
 
 Load subsamples
 
 ```{r,cache=TRUE,echo=FALSE}
+
+new_sleuth <- function(
+  kal_list, sample_to_condition,
+  design,
+  norm_bootstraps = TRUE, verbose = TRUE) {
+
+  ##############################
+  # check inputs
+
+  # data types
+  if (!all(unlist(lapply(kal_list, is, "kallisto")))) {
+    stop(paste0("One or more objects in '", substitute(kal_list),
+        "' (kal_list) is NOT a 'kallisto' object"))
+  }
+
+  if (!is(sample_to_condition, "data.frame")) {
+    stop(paste0("'", substitute(sample_to_condition), "' must be a data.frame"))
+  }
+
+  if (!is(design, "formula")) {
+    stop(paste0("'",substitute(design), "' (design) must be a formula"))
+  }
+
+  if (length(kal_list) != nrow(sample_to_condition)) {
+    stop(paste0("'", substitute(kal_list), "' must have the same length as the number of rows in '",
+        substitute(sample_to_condition), "'"))
+  }
+
+
+  if (!("sample" %in% colnames(sample_to_condition))) {
+    stop(paste0("'", substitute(sample_to_condition),
+        "' must contain a column names 'sample'"))
+  }
+
+  # TODO: ensure all kallisto have same number of transcripts
+  # TODO: ensure transcripts are in same order -- if not, sort them
+
+  # done
+  ##############################
+
+  if (verbose) cat("Appending sample names\n")
+
+  # append sample ane condition columns to data
+  kal_list <- lapply(seq_along(kal_list), function(it)
+    {
+      kal_list[[it]]$abundance <- kal_list[[it]]$abundance %>%
+        mutate(sample = sample_to_condition$sample[it])
+      kal_list[[it]]
+    })
+
+
+  obs_abundance_raw <- rbind_all(lapply(kal_list, function(k) k$abundance))
+
+  if (verbose) cat("Normalizing 'tpm'\n")
+  # normalize TPM using TMM
+  tpm_spread <- spread_abundance_by(obs_abundance_raw, "tpm")
+  # tpm_sf <- edgeR::calcNormFactors(tpm_spread)
+  tpm_sf <- DESeq2::estimateSizeFactorsForMatrix(tpm_spread)
+  tpm_norm <- t(t(tpm_spread) / tpm_sf) %>%
+    as.data.frame(stringsAsFactors = FALSE)
+  tpm_norm$target_id <- rownames(tpm_norm)
+  tpm_norm <- tidyr::gather(tpm_norm, sample, tpm, -target_id)
+
+  if (verbose) cat("Normalizing 'est_counts'\n")
+  # normalize est_counts using TMM
+  est_counts_spread <- spread_abundance_by(obs_abundance_raw, "est_counts")
+  # est_counts_sf <- edgeR::calcNormFactors(est_counts_spread)
+  est_counts_sf <- DESeq2::estimateSizeFactorsForMatrix(est_counts_spread)
+  est_counts_norm <- t(t(est_counts_spread) / est_counts_sf) %>%
+    as.data.frame(stringsAsFactors = FALSE)
+  est_counts_norm$target_id <- rownames(est_counts_norm)
+  est_counts_norm <- tidyr::gather(est_counts_norm, sample, est_counts, -target_id)
+
+  if (verbose) cat("Joining tpm and est_counts tables\n")
+  obs_norm <- inner_join(data.table::as.data.table(est_counts_norm),
+    data.table::as.data.table(tpm_norm), by = c("target_id", "sample"))
+
+  # sample_to_condition <- data.frame(sample = sample_names,
+  #   condition = condition_names, stringsAsFactors = FALSE)
+
+  if (verbose) cat("Joining tpm and est_counts tables\n")
+  obs_norm <- left_join(obs_norm,
+    data.table::as.data.table(sample_to_condition),
+    by = c("sample")) %>%
+    as.data.frame(stringsAsFactors = FALSE)
+
+  # Normalize all the bootstrap samples
+  if (norm_bootstraps) {
+    if (verbose) cat("Normalizing bootstrap samples\n")
+    kal_list <- lapply(seq_along(kal_list), function(i)
+      {
+        normalize_bootstrap(kal_list[[i]], tpm_sf[i], est_counts_sf[i])
+      })
+  }
+
+  structure(list(
+      kal = kal_list,
+      obs_raw = obs_abundance_raw,
+      obs_norm = obs_norm,
+      sample_to_condition = sample_to_condition,
+      bootstrap_summary = NA,
+      tpm_sf = tpm_sf,
+      est_counts_sf = est_counts_sf,
+      design = design,
+      design_matrix = model.matrix(design, sample_to_condition)
+      ),
+    class = "sleuth")
+}
+
+melt_bootstrap <- function(kal, column = "tpm")
+{
+    stopifnot(is(kal, "kallisto"))
+    stopifnot(length(kal$bootstrap) > 0)
+
+    all_boot <- kal$bootstrap
+    boot <- data.frame(lapply(all_boot, select_, .dots = list(column)))
+    bs_names <- paste0("bs", 1:ncol(boot))
+    data.table::setnames(boot, colnames(boot), bs_names)
+    boot <- boot %>%
+        mutate(target_id = all_boot[[1]]$target_id)
+
+    tidyr::gather_(boot, "sample", column, bs_names) %>%
+      mutate(sample = as.factor(sample))
+}
+
+summarize_bootstrap <- function(kal, column = "tpm")
+{
+    stopifnot(is(kal, "kallisto"))
+    bs <- melt_bootstrap(kal, column)
+
+    mean_col <- paste0("bs_mean_", column)
+    sd_col <- paste0("bs_sd_", column)
+    var_col <- paste0("bs_var_", column)
+    cv_col <- paste0("bs_cv_", column)
+
+    print(cv_col)
+
+    bs <- bs %>%
+        group_by(target_id) %>%
+        summarise_(.dots = setNames(list(
+                    interp(quote(mean(x)), x = as.name(column)),
+                    interp(quote(sd(x)), x = as.name(column)),
+                    interp(quote(var(x)), x = as.name(column))
+                    ),
+                c(mean_col, sd_col, var_col)))
+
+    bs <- bs %>%
+        mutate_(.dots = setNames(list(
+                    interp(quote(x / y),
+                        x = as.name(sd_col), y = as.name(mean_col))),
+                c(cv_col)
+                ))
+    bs
+}
+
+normalize_bootstrap <- function(kal, tpm_size_factor, est_counts_size_factor) {
+  stopifnot(is(kal, "kallisto"))
+  stopifnot(length(tpm_size_factor) == 1 && length(est_counts_size_factor) == 1)
+
+  calc_norm_tpm <- !missing(tpm_size_factor)
+  calc_norm_counts <- !missing(est_counts_size_factor)
+  bs <- lapply(kal$bootstrap, function(bs_tbl)
+    {
+      if (calc_norm_tpm)
+        bs_tbl$tpm <- bs_tbl$tpm / tpm_size_factor
+      if (calc_norm_counts)
+        bs_tbl$est_counts <- bs_tbl$est_counts / est_counts_size_factor
+
+      bs_tbl
+    })
+  kal$bootstrap <- bs
+
+  kal
+}
+
+.read_bootstrap_hdf5 <- function(fname, i, main_est) {
+  bs <- data.frame(
+    target_id = main_est$target_id,
+    stringsAsFactors = FALSE)
+  bs$est_counts <- as.numeric(rhdf5::h5read(fname, paste0("bootstrap/bs", i)))
+  bs$tpm <- counts_to_tpm(bs$est_counts, main_est$eff_len)
+
+  bs
+}
+
+read_kallisto_h5 <- function(fname, read_bootstrap = TRUE) {
+  stopifnot(is(fname, "character"))
+
+  fname <- path.expand(fname)
+
+  if (!file.exists(fname)) {
+    stop(paste0("Can't file file: '", fname, "'"))
+  }
+
+  target_id <- as.character(rhdf5::h5read(fname, "aux/ids"))
+  abund <- data.frame(target_id = target_id, stringsAsFactors = FALSE)
+  abund$est_counts <- as.numeric(rhdf5::h5read(fname, "est_counts"))
+  abund$eff_len <- as.numeric(rhdf5::h5read(fname, "aux/eff_lengths"))
+  abund$len <- as.numeric(rhdf5::h5read(fname, "aux/lengths"))
+
+  bs_samples <- list()
+  if (read_bootstrap) {
+    num_bootstrap <- as.integer(rhdf5::h5read(fname, "aux/num_bootstrap"))
+    if (num_bootstrap > 0) {
+      cat("Found ", num_bootstrap, " bootstrap samples\n")
+      bs_samples <- lapply(0:(num_bootstrap[1]-1), function(i)
+        {
+          .read_bootstrap_hdf5(fname, i, abund)
+        })
+    } else {
+      cat("No bootstrap samples found\n ")
+    }
+  }
+
+  abund$tpm <- counts_to_tpm(abund$est_counts, abund$eff_len)
+
+  invisible(structure(
+      list(abundance = abund,
+        bootstrap = bs_samples),
+      class = "kallisto"))
+}
+
+counts_to_tpm <- function(est_counts, eff_len) {
+  stopifnot( length(eff_len) == length(est_counts) )
+
+  which_valid <- which(eff_len > 0)
+
+  num <- (est_counts / eff_len)
+  num[-which_valid] <- 0
+  denom <- sum(num)
+
+  (1e6 * num) / denom
+}
+
+spread_abundance_by <- function(abund, var) {
+  # var <- lazyeval::lazy(var)
+  var_spread <- abund %>%
+    select_("target_id", "sample", var) %>%
+    tidyr::spread_("sample", var) %>%
+    as.data.frame(stringsAsFactors = FALSE)
+
+  rownames(var_spread) <- var_spread$target_id
+  var_spread["target_id"] <- NULL
+
+  as.matrix(var_spread)
+}
+
 all_ss_fname <- Sys.glob("../results/ss*/abundance.h5")
 all_ss <- lapply(all_ss_fname, read_kallisto_h5, read_bootstrap = FALSE)
 all_ss_id <- all_ss_fname %>%
