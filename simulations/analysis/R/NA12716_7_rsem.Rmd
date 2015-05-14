@@ -250,7 +250,7 @@ mr_upd <- lapply(mr,
 filt_length <- lapply(mr_upd,
     function(res)
     {
-        filtered_summary(res)$tpm
+        filtered_summary(res, tpm_oracle >= 1)$tpm
     }) %>%
     rbind_all()
 ```
@@ -458,7 +458,6 @@ ggplot(counts_dist, aes(oracle)) +
   facet_wrap(~ lab) +
   theme_bw(20) +
   xlab("true counts")
-  
 ```
 
 ```{r}
