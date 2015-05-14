@@ -7,7 +7,7 @@ This repo contains all the analysis to reproduce the results in the kallisto pap
 - The annotation used is gzipped in the annotation folder, unzip it before running the analysis
 - Install kallisto
 - Install [snakemake](https://bitbucket.org/johanneskoester/snakemake)
-- Install the tools referred to in `geuvadis/README.md` and `simulations/README.md`
+
 
 - Download the GEUVADIS sample and place it into
   - http://www.ebi.ac.uk/ena/data/view/ERR188140
