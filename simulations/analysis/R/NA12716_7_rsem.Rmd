@@ -132,9 +132,7 @@ no_filt_all <- lapply(mr,
 ```{r,fig.width=14,fig.height=10}
 no_filt_all %>%
   mutate(method = sub("est_counts_", "", method)) %>%
-#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>% 
   mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
-#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>%
   mutate(method = factor(method, labels = c(
                                             "TopHat2\n+\nCufflinks",
                                             "Sailfish",
@@ -144,7 +142,6 @@ no_filt_all %>%
                                             ))) %>% 
   group_by(method) %>%
   summarise(med_rel_diff = mean(med_scaled_err)) %>%
-#   filter(!grepl("cufflinks", method)) %>%
   ggplot(aes(method, med_rel_diff)) +
     geom_bar(stat="identity", fill = "black") +
     geom_text(aes(label = round(med_rel_diff, 2),
@@ -175,9 +172,7 @@ Looking at TPM:
 ```{r,fig.width=14,fig.height=10}
 no_filt_tpm %>%
   mutate(method = sub("tpm_", "", method)) %>%
-#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>% 
   mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
-#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>%
   mutate(method = factor(method, labels = c(
                                             "TopHat2\n+\nCufflinks",
                                             "Sailfish",
@@ -248,7 +243,7 @@ bwt2_times <- load_timings(20, "bwt2", "bwt2.json")
 express_times <- load_timings(20, "express", "express.json")
 bwt2_rsem_times <- load_timings(20, "bwt2_rsem", "bwt2_rsem.json")
 rsem_times <- load_timings(20, "rsem", "rsem.json")
-kallisto_times <- load_timings(20, "kallisto", "kallisto_soft.json")
+kallisto_times <- load_timings(20, "kallisto", "kallisto.json")
 #salmon_times <- load_timings(20, "salmon", "salmon.json")
 ```
 
@@ -296,51 +291,7 @@ total_time_summary %>%
     theme(legend.position = "none")
 ```
 
-# Look at bootstrap correlation
-
-```{r}
-kal_bs_1 <- file.path(base_dir, 1, "kallisto_bs", "abundance.h5") %>%
-    read_kallisto_h5(TRUE)
-```
-
-```{r}
-mr_1 <- lapply(1,
-  function(id)
-  {
-    merge_results(
-      list(all_sailfish[[id]], all_xprs[[id]], all_cufflinks[[id]], all_rsem[[id]],
-           all_kallisto[[id]], kal_bs_1$bootstrap[[1]], kal_bs_1$bootstrap[[2]]),
-      c("sailfish", "express", "cufflinks", "rsem", "kallisto", "bootstrap1", "bootstrap2"),
-      all_oracle[[id]])
-  })[[1]]
-```
-
-
-
-# Program variance vs bootstrap variance
-
-```{r}
-p_var <- mr[[1]]$m_est_counts %>%
-  filter(!grepl("kallisto", method)) %>%
-  group_by(target_id) %>%
-  summarise(prog_var = var(estimate))
-kal_bs_1_sum <- summarize_bootstrap(kal_bs_1, "est_counts")
-var_join <- inner_join(p_var, data.table(kal_bs_1_sum), by = c("target_id"))
-```
-
-```{r}
-SMALL <- 1e-1
-ggplot(var_join, aes(prog_var, bs_var_est_counts)) +
-  geom_point(alpha = 0.10) +
-  geom_abline(slope = 1, intercept = 0) +
-  scale_x_log10(limits = c(SMALL, 1e6)) +
-  scale_y_log10(limits = c(SMALL, 1e6))
-
-var_join %>% with(cor(prog_var, bs_var_est_counts))
-```
-
 # Paralog analysis
-
 
 ```{r}
 dgd <- fread("../dgd_Hsa_all_v.tsv", header=TRUE)
@@ -395,9 +346,7 @@ nf_paralog <- lapply(mr_paralog,
 
 nf_paralog %>%
   mutate(method = sub("est_counts_", "", method)) %>%
-#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>% 
   mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
-#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>%
   mutate(method = factor(method, labels = c(
                                             "TopHat2\n+\nCufflinks",
                                             "Sailfish",
