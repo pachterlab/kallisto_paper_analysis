@@ -16,7 +16,6 @@ K_LIST = [i for i in range(15, 76, 4)]
 
 rule all:
     input:
-#        expand("kallisto_30000000_{k}/abundance.h5", k = K_LIST )
         expand("no_error_sim_30000000_1.fq.gz" )
 
 
@@ -44,23 +43,6 @@ rule rsem_prepare:
         shell('mkdir -p {0}'.format( out_dir ) )
         shell('rsem-prepare-reference {0} {1}'.format( ANNO_FA, RSEM_REF ))
 
-rule kal_index:
-    output:
-        IDX + "/" + ANNO_PREFIX + "_{k}.kidx"
-    threads: 1
-    shell:
-        "kallisto index "
-        "-i " + IDX + "/" + ANNO_PREFIX + "_{wildcards.k}.kidx"
-        "-k {wildcards.k} " + ANNO_FA
-
-#rule kallisto_index:
-#    output:
-#	"./" + IDX + "/" + ANNO_PREFIX + '_{k}.kidx'
-#    threads: 1
-#    shell:
-#        'kallisto index '
-#        '-i ' + IDX + '/' + ANNO_PREFIX + '_{wildcards.k}.kidx '
-#	'-k {wildcards.k} ' + ANNO_FA
 
 ########################################################################
 # GENERATE SIMULATION
@@ -85,24 +67,3 @@ rule rsem_simulate:
             ])
         shell(cmd)
         shell("gzip no_error_sim*.fq")
-
-
-########################################################################
-# QUANTIFY SIMULATIONS
-########################################################################
-
-# Run kallisto on RSEM simulations
-rule kallisto_rsem_sim:
-    input:
-        "no_error_sim_{n_reads}_1.fq.gz",
-        "no_error_sim_{n_reads}_2.fq.gz",
-        IDX + "/" + ANNO_PREFIX + "_{k}.kidx"
-    output:
-        "kallisto_{n_reads}_{k}/abundance.h5"
-    threads: 1
-    message:
-        "kallisto quant on {input[0]}"
-    shell:
-        "kallisto quant -i {input[2]} "
-        "-o kallisto_{wildcards.n_reads}_{wildcards.k} "
-        "{input[0]} {input[1]}"
