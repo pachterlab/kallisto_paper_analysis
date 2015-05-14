@@ -7,3 +7,8 @@
 *.Rdata
 *.snakemake
 *Snakefile.swp
+*/benchmarks/
+GRCh37_75/
+index/
+annotation/
+personalized_simulation/NA12716_7/alignments/
