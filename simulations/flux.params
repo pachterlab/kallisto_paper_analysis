@@ -1,0 +1,140 @@
+# The annotation file
+#
+ANNOTATION_FILE	
+
+#  Information from the read descriptor that will be used for annotation mapping
+#
+# [AUTO, SINGLE, PAIRED, SINGLE_STRANDED, PAIRED_STRANDED] default: AUTO
+ANNOTATION_MAPPING	AUTO
+
+#  Count specified elements. Possible elements are : [SPLICE_JUNCTIONS, INTRONS]
+#
+# [SPLICE_JUNCTIONS, INTRONS] default: []
+COUNT_ELEMENTS	[]
+
+# Calculate coverage profile write it to the specified file
+#
+COVERAGE_FILE	
+
+# Disable the deconvolution step
+#
+# true|false or yes|no default: false
+DISABLE_DECONVOLUTION	false
+
+# Disable scanning of input files before the run
+#
+# true|false or yes|no default: false
+DISABLE_FILE_CHECK	false
+
+# Disable weighted counts for multi-maps
+#
+# true|false or yes|no default: false
+DISABLE_MULTIMAP_WEIGHTING	false
+
+# Ignore SAM flags when scanning the mapping file
+#
+# true|false or yes|no default: false
+IGNORE_SAM_FLAGS	false
+
+# Ignore SAM pairing information in the quantification
+#
+# true|false or yes|no default: false
+IGNORE_SAM_PAIRING_INFORMATION	false
+
+# The file for output of inserts
+#
+INSERT_FILE	
+
+# Keeps input files (ANNOTATION_FILE, MAPPING_FILE)
+#
+KEEP_SORTED	
+
+# The mapping file
+#
+MAPPING_FILE	
+
+# Minimum length of introns of the annotation that are considered real and not indels/gaps, "introns" with a length < MIN_ILEN are removed by joining the flanking exons
+#
+# number default: 25
+MIN_ILEN	25
+
+# Minimum number of reads to be left in a locus by the linear solver.
+#  It can be expressed as an absolute number of reads (>1) or as fraction of the observed read count [0..1].
+# With MIN_OBS > 0 the lp-solver will be forced to provide a deconvolution in all loci with > 0 annotation-mapped reads or pairs. The derived quantifications may be variable in loci with less observations than changes that are necessary to perform the deconvolution.
+#
+# number default: 0.0
+MIN_OBS	0.0
+
+# Minimum mapping score. Mappings with score < min_score are discarded (mapq for BAM, score for BED)
+#
+# number default: -1
+MIN_SCORE	-1
+
+#  Annotation sources (GTF field 2) that are disregarded during profiling
+#
+# [] default: 
+PROFILE_EXCLUDE	
+
+# The profile file
+#
+PROFILE_FILE	
+
+#  Annotation sources (GTF field 2) that are considered during profiling
+#
+# [] default: 
+PROFILE_INCLUDE	
+
+# The file for outputting profiles
+#
+PROFILE_OUTPUT	
+
+#  Expression how to parse the read IDs, or one of the shorthand names (ANTISENSE,STRAND_MATE,BARNA,MATE2_SENSE,MATE1_SENSE,MATE_STRAND_CSHL,SENSE,SIMULATOR,PAIRED,SIMPLE,CASAVA18)
+#
+READ_DESCRIPTOR	
+
+#  Information about read strandedness
+#
+# [NONE, SENSE, ASENSE, MATE1_SENSE, MATE2_SENSE] default: NONE
+READ_STRAND	NONE
+
+# Only use primary alignments for quantification
+#
+# true|false or yes|no default: false
+SAM_PRIMARY_ONLY	false
+
+# Only use unique alignments for quantification
+#
+# true|false or yes|no default: false
+SAM_UNIQUE_ONLY	false
+
+#  Set SAMtools validation stringency for validating records. One of STRICT|LENIENT|SILENT
+#
+# [STRICT, LENIENT, SILENT] default: SILENT
+SAM_VALIDATION_STRINGENCY	SILENT
+
+# Sort reads in RAM memory, not on disk. This is the default behaviour. You can force sorting on disk with the --sort-on-disk option
+#
+# true|false or yes|no default: true
+SORT_IN_RAM	true
+
+# Sort reads on disk
+#
+# true|false or yes|no default: false
+SORT_ON_DISK	false
+
+# The file to which the run characteristics are written
+#
+STATS_FILE	
+
+# The file for log messages
+#
+STDERR_FILE	
+
+# The file for default output
+#
+STDOUT_FILE	
+
+# The temporary directory
+#
+TMP_DIR	/tmp
+
