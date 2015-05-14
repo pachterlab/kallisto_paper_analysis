@@ -425,7 +425,7 @@ rule kallisto_soft_rsem_sim:
     message:
         "kallisto quant w/ bs on {input[0]} {output}"
     shell:
-        "/home/pmelsted/kallisto/soft/src/kallisto quant -i {KAL_IDX} "
+        "~/kallisto_soft/kallisto quant -i {KAL_IDX} "
         "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}"
         "/{wildcards.sim_id}/kallisto_soft "
         "{input[0]} {input[1]}"

@@ -101,7 +101,7 @@ all_sailfish <- lapply(1:20,
 all_kallisto <- lapply(1:20,
   function(id)
   {
-    fname <- file.path(base_dir, id, "kallisto", "abundance.h5")
+    fname <- file.path(base_dir, id, "kallisto_soft", "abundance.h5")
     read_kallisto_h5(fname, FALSE)$abundance
   })
 ```
@@ -128,67 +128,81 @@ no_filt_all <- lapply(mr,
     rbind_all()
 ```
 
-```{r,fig.width=14,fig.height=10}
-no_filt_all %>%
-  mutate(method = sub("est_counts_", "", method)) %>%
-  ggplot(aes(method, spearman, colour = method)) +
-    geom_jitter(aes(shape = factor(method)), alpha = 0.6, size = 3) +
-    ylim(0.85, 1) +
-    ylab("Spearman") +
-    xlab("Method") +
-    scale_x_discrete(labels = c("Cufflinks", "eXpress", "kallisto", "RSEM",
-                                "Sailfish")) +
-    theme_bw(25) +
-    theme(legend.position="none")
-```
 
 ```{r,fig.width=14,fig.height=10}
 no_filt_all %>%
   mutate(method = sub("est_counts_", "", method)) %>%
-#   filter(!grepl("cufflinks", method)) %>%
-  ggplot(aes(method, med_scaled_err, colour = method)) +
-    theme_bw(25) +
-    theme(legend.position="none") +
-    ylab("Relative difference") +
-    geom_jitter() +
-    ylim(0, 1)
-```
-
-```{r,fig.width=14,fig.height=10}
-no_filt_all %>%
-  mutate(method = sub("est_counts_", "", method)) %>%
+#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>% 
+  mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
+#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>%
+  mutate(method = factor(method, labels = c(
+                                            "TopHat2\n+\nCufflinks",
+                                            "Sailfish",
+                                            "Bowtie2\n+\neXpress",
+                                            "kallisto",
+                                            "Bowtie2\n+\nRSEM"
+                                            ))) %>% 
   group_by(method) %>%
-  summarise(relative_diff = median(med_scaled_err)) %>%
-  mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>%
-  mutate(method = factor(method, labels = c("Bowtie2 +\nRSEM", "kallisto",
-                                            "Bowtie2 +\neXpress", "Sailfish",
-                                            "  TopHat2 +\nCufflinks"))) %>%
-  ggplot(aes(method, relative_diff)) +
-    geom_bar(stat = "identity", fill = "dark grey") +
-    geom_text(aes(label = round(relative_diff, 2), y = relative_diff + 0.05),
-            colour = "black", size = 7) +
-    theme_bw(25) +
-    theme(legend.position="none") +
-    ylab("Median relative difference") +
-    xlab("Method") +
-    ylim(0, 1)
-
-# total_time_summary %>%
-#   ggplot(aes(method, minutes)) +
-#     geom_bar(stat="identity", fill = "dark grey") +
-#     geom_text(aes(label = round(minutes, 2), y = pos),
-#               colour = "black", size = 7) +
-#     xlab("Method") +
-#     ylab("Minutes") +
-#     theme_bw(25) +
-# #     scale_x_discrete(labels = c("kallisto", "Sailfish", "BWT2 +\neXpress",
-# #                               "BWT2 +\nRSEM", "TH2 +\nCufflinks")) +
-# #     scale_fill_manual(values = cbbPalette) +
-#     theme(legend.position = "none")
-
-
+  summarise(med_rel_diff = mean(med_scaled_err)) %>%
+#   filter(!grepl("cufflinks", method)) %>%
+  ggplot(aes(method, med_rel_diff)) +
+    geom_bar(stat="identity", fill = "black") +
+    geom_text(aes(label = round(med_rel_diff, 2),
+                  y = med_rel_diff + 0.06),
+              colour = "black", size = 5.5) +
+    xlab("") + 
+    theme_bw() +
+    ylab("median relative difference") +  
+    theme(legend.position = "none",
+          axis.text.y=element_text(size=16),
+          axis.text.x=element_text(size=17),
+          axis.title.y=element_text(size=20, vjust=1),
+          axis.title.x=element_text(size=20) ) +
+      ylim(0, 1)
 ```
 
+```{r}
+no_filt_tpm <- lapply(mr,
+    function(res)
+    {
+        filtered_summary(res)$tpm
+    }) %>%
+    rbind_all()
+```
+
+Looking at TPM:
+
+```{r,fig.width=14,fig.height=10}
+no_filt_tpm %>%
+  mutate(method = sub("tpm_", "", method)) %>%
+#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>% 
+  mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
+#   mutate(method = factor(method, levels = c("rsem", "kallisto", "express", "sailfish", "cufflinks"))) %>%
+  mutate(method = factor(method, labels = c(
+                                            "TopHat2\n+\nCufflinks",
+                                            "Sailfish",
+                                            "Bowtie2\n+\neXpress",
+                                            "kallisto",
+                                            "Bowtie2\n+\nRSEM"
+                                            ))) %>% 
+  group_by(method) %>%
+  summarise(med_rel_diff = mean(med_scaled_err)) %>%
+#   filter(!grepl("cufflinks", method)) %>%
+  ggplot(aes(method, med_rel_diff)) +
+    geom_bar(stat="identity", fill = "black") +
+    geom_text(aes(label = round(med_rel_diff, 2),
+                  y = med_rel_diff + 0.06),
+              colour = "black", size = 5.5) +
+    xlab("") + 
+    theme_bw() +
+    ylab("median relative difference") +  
+    theme(legend.position = "none",
+          axis.text.y=element_text(size=16),
+          axis.text.x=element_text(size=17),
+          axis.title.y=element_text(size=20, vjust=1),
+          axis.title.x=element_text(size=20) ) +
+      ylim(0, 1)
+```
 
 
 ## Filtering
@@ -200,21 +214,6 @@ filt_tpm_1_all <- lapply(mr,
         filtered_summary(res, tpm_oracle >= 1.0)$est_counts
     }) %>%
     rbind_all()
-```
-
-```{r,fig.width=14,fig.height=10}
-ggplot(filt_tpm_1_all, aes(method, spearman, colour = method)) +
-  geom_jitter() +
-  ylim(0.8, 1)
-```
-
-```{r,fig.width=14,fig.height=10}
-filt_tpm_1_all %>%
-#   filter(!grepl("cufflinks", method)) %>%
-  ggplot(aes(method, med_scaled_err, colour=method)) +
-    geom_jitter() +
-    theme_bw(25)
-    ylim(0, 0.2)
 ```
 
 # Timings
@@ -249,7 +248,7 @@ bwt2_times <- load_timings(20, "bwt2", "bwt2.json")
 express_times <- load_timings(20, "express", "express.json")
 bwt2_rsem_times <- load_timings(20, "bwt2_rsem", "bwt2_rsem.json")
 rsem_times <- load_timings(20, "rsem", "rsem.json")
-kallisto_times <- load_timings(20, "kallisto", "kallisto.json")
+kallisto_times <- load_timings(20, "kallisto", "kallisto_soft.json")
 #salmon_times <- load_timings(20, "salmon", "salmon.json")
 ```
 
@@ -263,8 +262,11 @@ total_time_rsem <- sum(bwt2_rsem_times$seconds) + sum(rsem_times$seconds)
 total_time_kallisto <- max(kallisto_times$seconds)
 
 total_time_summary <- data.frame(
-  method = factor(c("Bowtie2 +\neXpress", "Sailfish", "TopHat2 +\nCufflinks", "Bowtie2 +\nRSEM", "kallisto"),
-                  levels = c("kallisto", "Sailfish", "Bowtie2 +\neXpress", "Bowtie2 +\nRSEM", "TopHat2 +\nCufflinks")),
+  method = factor(c("Bowtie2\n+\neXpress", "Sailfish",
+                    "TopHat2\n+\nCufflinks", "Bowtie2\n+\nRSEM",
+                    "kallisto"),
+                  levels = c("kallisto", "Sailfish", "Bowtie2\n+\neXpress",
+                             "Bowtie2\n+\nRSEM", "TopHat2\n+\nCufflinks")),
   seconds = c(total_time_express, total_time_sailfish, total_time_cufflinks,
               total_time_rsem, total_time_kallisto),
   stringsAsFactors = FALSE) %>%
@@ -275,14 +277,14 @@ cbbPalette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
 ```
 
 ```{r}
-total_time_summary <- total_time_summary %>%
-  mutate(pos = minutes) %>%
-  mutate(pos = ifelse(method == "TopHat2 +\nCufflinks", minutes * 1.02, pos)) %>%
-  mutate(pos = ifelse(method == "Bowtie2 +\nRSEM", minutes * 1.05, pos)) %>%
-  mutate(pos = ifelse(method == "Sailfish", minutes * 2, pos)) %>%
-  mutate(pos = ifelse(method == "Bowtie2 +\neXpress", minutes * 1.08, pos)) %>%
-  mutate(pos = ifelse(method == "kallisto", minutes * 7, pos))  
+total_time_summary$method <- reorder(total_time_summary$method, -total_time_summary$minutes)
+```
 
+
+
+```{r}
+total_time_summary <- total_time_summary %>%
+  mutate(pos = minutes)
 total_time_summary %>%
   ggplot(aes(method, minutes)) +
     geom_bar(stat="identity", fill = "dark grey") +
@@ -291,9 +293,6 @@ total_time_summary %>%
     xlab("Method") +
     ylab("Minutes") +
     theme_bw(25) +
-#     scale_x_discrete(labels = c("kallisto", "Sailfish", "BWT2 +\neXpress",
-#                               "BWT2 +\nRSEM", "TH2 +\nCufflinks")) +
-#     scale_fill_manual(values = cbbPalette) +
     theme(legend.position = "none")
 ```
 
@@ -346,9 +345,9 @@ var_join %>% with(cor(prog_var, bs_var_est_counts))
 ```{r}
 dgd <- fread("../dgd_Hsa_all_v.tsv", header=TRUE)
 dgd_unique <- dgd %>%
-  select(gene_id = ENS_ID) %>%
+  dplyr::select(gene_id = ENS_ID) %>%
   distinct()
-
+```
 ```{r}
 library(biomaRt)
 mart <- useMart(biomart = "ensembl", dataset
@@ -376,10 +375,10 @@ mr_paralog <- lapply(mr,
 sanity check:
 
 ```{r}
-n_pa
 n_paralog_trans <- dplyr::select(mr_paralog[[1]]$m_est_counts, target_id) %>%
   distinct() %>%
   nrow()
+n_paralog_trans
 ```
 
 ```{r}
