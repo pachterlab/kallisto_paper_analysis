@@ -9,11 +9,13 @@ This repo contains all the analysis to reproduce the results in the kallisto pap
 - Install [snakemake](https://bitbucket.org/johanneskoester/snakemake)
 - Install the tools referred to in `geuvadis/README.md` and `simulations/README.md`
 
-- Download the GEUVADIS data (see `geuvadis/REAMDE.md`)
+- Download the GEUVADIS sample and place it into
+  - http://www.ebi.ac.uk/ena/data/view/ERR188140
+- Place it into simulations/NA12716_7/NA12716_7_1.fastq.gz, simulations/NA12716_7/NA12716_7_2.fastq.gz
+- Make a symlink from those files to personalized_simulation/NA12716_7/ or copy them over again
 
 ### Directories
 
-- `geuvadis` - contains all the GEUVADIS analysis
 - `personalized_simulation` - contains the allele-specific expression
   simulations
 - `seqc` - contails the analysis for the SEQC dataset used in the bootstrap
