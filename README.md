@@ -1,6 +1,6 @@
 # kallisto paper analysis
 
-This repo contains all the analysis to reproduce the results in the kallisto paper.
+This repo contains all the analysis to reproduce the results and figures in the kallisto paper.
 
 # Preliminaries
 
