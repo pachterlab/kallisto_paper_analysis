@@ -386,7 +386,7 @@ no_filt_tpm %>%
           axis.text.x=element_text(size=17),
           axis.title.y=element_text(size=20, vjust=1),
           axis.title.x=element_text(size=20) ) +
-      ylim(0, 0.6)
+      ylim(0, 1)
 ```
 
 
