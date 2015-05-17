@@ -1,11 +1,11 @@
 # kallisto paper analysis
 
-This repo contains all the analysis to reproduce the results and figures in the kallisto paper.
+This repo contains all the analysis to reproduce the results and figures in the [kallisto paper](http://arxiv.org/abs/1505.02710).
 
 # Preliminaries
 
 - The annotation used is gzipped in the annotation folder, unzip it before running the analysis
-- Install kallisto
+- Install [kallisto](pachterlab.github.io/kallisto)
 - Install [snakemake](https://bitbucket.org/johanneskoester/snakemake)
 
 
