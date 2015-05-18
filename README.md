@@ -1,6 +1,6 @@
 # kallisto paper analysis
 
-This repo contains all the analysis to reproduce the results and figures in the [kallisto paper](http://arxiv.org/abs/1505.02710)
+This repository contains snakemake files that allow for the automatic reproducibility of all the analysis, results and figures in the [kallisto paper](http://arxiv.org/abs/1505.02710). 
 
 # Preliminaries
 
