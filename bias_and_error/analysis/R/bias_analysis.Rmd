@@ -1,0 +1,162 @@
+---
+title: "Bias analysis"
+output:
+  html_document:
+    toc: true
+---
+
+We investigate the simulations from the eXpress paper.
+
+Let's just load some packages we need:
+
+```{r}
+library("data.table")
+library("dplyr")
+library("sleuth")
+```
+
+# Preliminaries
+
+```{r}
+base_dir <- "../../results"
+```
+
+kallisto results:
+
+```{r}
+kal_bb <- read_kallisto_h5(
+  file.path(base_dir, "bias_and_error", "kallisto_bias", "abundance.h5"),
+  FALSE)$abundance
+kal_bn <- read_kallisto_h5(
+  file.path(base_dir, "bias_and_error", "kallisto", "abundance.h5"),
+  FALSE)$abundance
+kal_eb <- read_kallisto_h5(
+  file.path(base_dir, "error_only", "kallisto_bias", "abundance.h5"),
+  FALSE)$abundance
+kal_en <- read_kallisto_h5(
+  file.path(base_dir, "error_only", "kallisto", "abundance.h5"),
+  FALSE)$abundance
+```
+
+eXpress results were obtained from authors:
+
+```{r}
+xprs_bb <- read.table(
+  gzfile(file.path(base_dir, "results_bias.xprs.gz")),
+  stringsAsFactors = FALSE, header = TRUE) %>%
+  mutate(tpm = (fpkm / sum(fpkm)) * 1e6)
+# TODO: find out if express was run with bias correction on error only data
+xprs_eb <- read.table(
+  gzfile(file.path(base_dir, "results_error_only.xprs.gz")),
+  stringsAsFactors = FALSE, header = TRUE) %>%
+  mutate(tpm = (fpkm / sum(fpkm)) * 1e6)  
+```
+
+And now the oracles:
+
+```{r}
+reformat_oracle <- function(df, counts) {
+  # assumes read a "transcripts.in" file
+  colnames(df) <- c("target_id", "length", "rho")
+  # the weird computation of tpm is to make it slightly more stable
+  df <- df %>%
+    mutate(rho = ifelse(rho < 0, 0, rho)) %>%
+    mutate(
+      tpm = (rho * 1e6 / sum(rho * 1e6)) * 1e6,
+      rho = rho / sum(rho)
+      )
+  df <- left_join(df, counts, by = c("target_id"))
+  df <- mutate(df, counts = ifelse(is.na(counts), 0, counts))
+  
+  df
+}
+```
+
+```{r}
+oracle_bias <- read.table("../../simdata/bias_and_error/transcripts.in", header = TRUE,
+  stringsAsFactors = FALSE)
+oracle_error <- read.table("../../simdata/error_only/transcripts.in", header = TRUE,
+  stringsAsFactors = FALSE)
+```
+
+The true number of counts isn't provided, so instead we will derive this by reading the actual reads.
+
+```{r}
+oracle_counts_bias <- read.table("../../simdata/bias_and_error/counts.txt",
+  header = FALSE, stringsAsFactors = FALSE)
+colnames(oracle_counts_bias) <- c("target_id", "counts")
+oracle_counts_error <- read.table("../../simdata/error_only/counts.txt",
+  header = FALSE, stringsAsFactors = FALSE)
+colnames(oracle_counts_error) <- c("target_id", "counts")
+```
+
+Let's now join the counts and reformat the oracle to be consistent with what `sleuth` is expecting:
+
+```{r}
+oracle_bias <- reformat_oracle(oracle_bias, oracle_counts_bias)
+oracle_error <- reformat_oracle(oracle_error, oracle_counts_error)
+```
+
+## Merging results
+
+We merge results using sleuth.
+
+```{r}
+mr_bias <- merge_results(
+  list(kal_bb, kal_bn, xprs_bb),
+  c("kallisto_bias", "kallisto", "express"),
+  oracle_bias
+  )
+```
+
+```{r}
+mr_error <- merge_results(
+  list(kal_eb, kal_en, xprs_eb),
+  c("kallisto_bias", "kallisto", "express"),
+  oracle_error
+  )
+```
+
+# Bias and error results
+
+```{r}
+filtered_summary(mr_bias) %>%
+  lapply(as.data.frame)
+```
+
+```{r}
+filtered_summary(mr_bias, tpm_oracle > 1)  %>%
+  lapply(as.data.frame)
+```
+
+# Error only results
+
+```{r}
+filtered_summary(mr_error) %>%
+  lapply(as.data.frame)
+```
+
+```{r}
+filtered_summary(mr_bias, tpm_oracle > 1)  %>%
+  lapply(as.data.frame)
+```
+
+# Timings
+
+```{r}
+timing_fnames <- Sys.glob("../../benchmarks/*/*.json")
+timings <- data.frame(
+  kallisto_mode =  sub(".json", "", basename(timing_fnames)),
+  dataset = basename(dirname(timing_fnames)),
+  stringsAsFactors = FALSE)
+timings$seconds <- sapply(timing_fnames, function(f) jsonlite::fromJSON(f)$wall_clock_time$s)
+```
+
+```{r}
+timings <- timings %>%
+  mutate(minutes = seconds / 60, hours = seconds / (60*60))
+```
+
+```{r}
+timings %>% print(width = ncol(.))
+```

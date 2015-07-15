@@ -10,8 +10,10 @@ SIMS = ['bias_and_error', 'error_only']
 rule all:
     input:
         'simdata/README',
+        expand('simdata/{sim}/counts.txt', sim = SIMS),
         expand('results/{sim}/kallisto/abundance.h5', sim = SIMS),
-        expand('results/{sim}/kallisto_bias/abundance.h5', sim = SIMS)
+        expand('results/{sim}/kallisto_bias/abundance.h5', sim = SIMS),
+        'analysis/R/bias_analysis.html'
 
 rule download_express_sim:
     output:
@@ -76,3 +78,48 @@ rule kallisto:
         '-i {KAL_IDX} '
         '-o {output[0]} '
         '{input[0]} {input[1]}'
+
+#rule get_true_counts:
+#    input:
+#        'simdata/{sim}/sim_1.fa.gz'
+#    output:
+#        'simdata/{sim}/counts.txt'
+#    shell:
+#        'zcat {input} | '
+#        'grep \'^>\' | '
+#        'tr -d \'>\' | '
+#        'awk \'BEGIN {{FS=":"}} {{print $2}}\' | '
+#        'sort | '
+#        'uniq -c >'
+#        '{output}'
+
+rule get_true_counts:
+    input:
+        'simdata/{sim}/sim_1.fa.gz'
+    output:
+        'simdata/{sim}/counts.txt'
+    threads:
+        1
+    shell:
+        'python analysis/count_reads.py '
+        '<(zcat {input}) > '
+        '{output}'
+    
+rule gen_report:
+    input:
+        expand('simdata/{sim}/counts.txt', sim = SIMS)
+    output:
+        'analysis/R/bias_analysis.html'
+    threads:
+        1
+    shell:
+        '''
+        Rscript \
+        --default-packages=utils,methods,stats,grDevices,graphics \
+        -e 'setwd("analysis/R")' \
+        -e 'rmarkdown::render("bias_analysis.Rmd")'
+        '''
+
+rule clean:
+    shell:
+        'rm analysis/R/bias_analysis.html'
