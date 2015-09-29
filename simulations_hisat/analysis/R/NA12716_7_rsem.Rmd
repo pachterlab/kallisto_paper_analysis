@@ -113,6 +113,14 @@ all_cufflinks_hisat <- lapply(1:20,
   })
 ```
 
+```{r}
+lower_bound <- 1e-100
+small_filter <- function(x) {
+  ifelse(x < lower_bound, 0, x)
+}
+```
+
+
 ```{r,warning=FALSE,cache=TRUE}
 all_rsem <- lapply(1:20,
   function(id)
@@ -182,6 +190,34 @@ all_xprs <- lapply(all_xprs,
 ```
 
 ```{r}
+all_cufflinks_hisat <- lapply(all_cufflinks_hisat,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_cufflinks_tophat <- lapply(all_cufflinks_tophat,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_sailfish <- lapply(all_sailfish,
+    function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_xprs <- lapply(all_xprs,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_rsem <- lapply(all_rsem,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_kallisto <- lapply(all_kallisto,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+    })
+```
+
+
+```{r}
 mr <- lapply(seq_along(all_oracle),
   function(id)
   {
@@ -225,7 +261,6 @@ no_filt_all %>%
 ```
 
 ```{r}
-# TODO: remember to remove the index below
 filter_perfect <- lapply(mr,
     function(res)
     {
@@ -241,10 +276,11 @@ filter_perfect <- lapply(mr,
 ```
 
 
-This next plot shows performance on mean of median relative difference:
+This next plot shows performance on mean of median relative difference which appears in the paper:
 
 ```{r}
 filter_perfect %>% 
+  filter(!grepl('mon', method)) %>% 
   mutate(method = sub('est_counts_', '', as.character(method))) %>%
   mutate(method = factor(method, arrange(., desc(mean_mrd))[['method']])) %>%
   ggplot(aes(method, mean_mrd)) +
@@ -596,12 +632,12 @@ load the quantification times
 
 ```{r,echo=FALSE}
 sailfish_times <- load_timings(20, "Sailfish", "sailfish.json", 'quant')
-cufflinks_tophat_times <- load_timings(20, "Cufflinks\n+\nTopHat",
+cufflinks_tophat_times <- load_timings(20, "TopHat2\n+\nCufflinks",
   "cufflinks_tophat.json", 'quant')
-cufflinks_hisat_times <- load_timings(20, "Cufflinks\n+\nHISAT",
+cufflinks_hisat_times <- load_timings(20, "HISAT\n+\nCufflinks",
   "cufflinks_hisat.json", 'quant')
-express_times <- load_timings(20, "eXpress", "express.json", 'quant')
-rsem_times <- load_timings(20, "RSEM", "rsem.json", 'quant')
+express_times <- load_timings(20, "Bowtie2\n+\neXpress", "express.json", 'quant')
+rsem_times <- load_timings(20, "Bowtie2\n+\nRSEM", "rsem.json", 'quant')
 kallisto_times <- load_timings(20, "kallisto", "kallisto.json", 'quant')
 salmon_times <- load_timings(20, "Salmon", "salmon.json", 'quant')
 #salmon_times <- load_timings(20, "salmon", "salmon_0.4.2.json")
@@ -610,10 +646,10 @@ salmon_times <- load_timings(20, "Salmon", "salmon.json", 'quant')
 load the alignments times
 
 ```{r}
-tophat_times <- load_timings(20, "Cufflinks\n+\nTopHat", "tophat.json", 'align')
-hisat_times <- load_timings(20, "Cufflinks\n+\nHISAT", "hisat.json", 'align')
-bwt2_times <- load_timings(20, "eXpress", "bwt2.json", 'align')
-bwt2_rsem_times <- load_timings(20, "RSEM", "bwt2_rsem.json", 'align')
+tophat_times <- load_timings(20, "TopHat2\n+\nCufflinks", "tophat.json", 'align')
+hisat_times <- load_timings(20, "HISAT\n+\nCufflinks", "hisat.json", 'align')
+bwt2_times <- load_timings(20, "Bowtie2\n+\neXpress", "bwt2.json", 'align')
+bwt2_rsem_times <- load_timings(20, "Bowtie2\n+\nRSEM", "bwt2_rsem.json", 'align')
 ```
 
 ```{r}
@@ -660,7 +696,7 @@ parallel_times <- parallel_times %>%
 plot_times <- bind_rows(
   parallel_times,
   bwt2_times,
-  filter(all_times, grepl('Top|HI|RSE|fish|mon', method)))
+  filter(all_times, grepl('Top|HI|RSE|fish', method)))
 ```
 
 ```{r}
@@ -755,10 +791,10 @@ dgd_unique <- dgd %>%
 ```{r}
 library(biomaRt)
 mart <- useMart(biomart = "ensembl", dataset
-      = "hsapiens_gene_ensembl")
+  = "hsapiens_gene_ensembl")
 gene_names <- getBM(attributes
-      = c("ensembl_transcript_id","ensembl_gene_id"), mart
-      = mart)
+  = c("ensembl_transcript_id","ensembl_gene_id"), mart
+  = mart)
 ```
 
 ```{r}
@@ -769,11 +805,11 @@ dgd_unique <- dgd_unique %>%
   data.table() %>%
   inner_join(gene_names, by = "gene_id")
 mr_paralog <- lapply(mr,
-                     function(x)
-                       {
-                        x$m_est_counts <- inner_join(x$m_est_counts, dgd_unique, by = "target_id")
-                        x
-                       })
+  function(x)
+    {
+    x$m_est_counts <- inner_join(x$m_est_counts, dgd_unique, by = "target_id")
+    x
+    })
 ```
 
 sanity check:
@@ -796,25 +832,18 @@ nf_paralog <- lapply(mr_paralog,
 ```
 
 ```{r}
-
 nf_paralog %>%
+  filter(!grepl('Salmon', method)) %>% 
   mutate(method = sub("est_counts_", "", method)) %>%
-  mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
-  mutate(method = factor(method, labels = c(
-                                            "TopHat2\n+\nCufflinks",
-                                            "Sailfish",
-                                            "Bowtie2\n+\neXpress",
-                                            "kallisto",
-                                            "Bowtie2\n+\nRSEM"
-                                            ))) %>% 
   group_by(method) %>%
-  summarise(med_rel_diff = mean(med_scaled_err)) %>%
+  summarise(mean_mrd = mean(mrd)) %>%
+  mutate(method = factor(method, arrange(., desc(mean_mrd))[['method']])) %>%  
 #   filter(!grepl("cufflinks", method)) %>%
-  ggplot(aes(method, med_rel_diff)) +
+  ggplot(aes(method, mean_mrd)) +
     geom_bar(stat="identity", fill = "black") +
-    geom_text(aes(label = round(med_rel_diff, 2),
-                  y = med_rel_diff + 0.06),
-              colour = "black", size = 5.5) +
+    geom_text(aes(label = round(mean_mrd, 2)),
+      position=position_dodge(width=0.9), vjust=-0.25,
+              colour = "black", size = 5.5) +  
     xlab("") + 
     theme_bw() +
     ylab("median relative difference") +  
@@ -850,14 +879,4 @@ ggplot(counts_dist, aes(oracle)) +
   facet_wrap(~ lab) +
   theme_bw(20) +
   xlab("true counts")
-```
-
-```{r}
-hi <- dplyr::select(all_kallisto[[1]], target_id, eff_len) %>%
-  inner_join(dplyr::select(all_rsem[[1]], target_id, rsem_eff_len = eff_len), by = 'target_id')
-
-ggplot(hi, aes(eff_len, rsem_eff_len)) +
-  geom_point() +
-  xlim(0, 250) +
-  ylim(0, 250)
 ```
