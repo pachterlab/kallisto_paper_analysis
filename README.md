@@ -2,6 +2,8 @@
 
 This repo contains all the analysis to reproduce the results in the kallisto paper.
 
+The latest version of this analysis is accessible via [GitHub](https://github.com/pachterlab/kallisto_paper_analysis).
+
 # Preliminaries
 
 - Install [snakemake](https://bitbucket.org/johanneskoester/snakemake)
