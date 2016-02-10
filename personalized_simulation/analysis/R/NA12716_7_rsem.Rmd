@@ -1,0 +1,276 @@
+---
+title: "Investigating personalized RNA-Seq simulation"
+output:
+  html_document:
+    toc: true
+---
+
+```{r}
+library("data.table")
+library("dplyr")
+library("reshape2")
+library("sleuth")
+library("ggplot2")
+library('jsonlite')
+library('mamabear')
+library('scales')
+```
+
+# Loading the results
+
+Let's first get info on all the data
+
+```{r,echo=FALSE}
+base_dir <- "../../NA12716_7/rsem/sim/30000000"
+# base_dir <- "~/kallisto_paper_analysis/simulations_hisat/NA12716_7/rsem/sim/30000000"
+```
+
+
+Load all data:
+
+```{r,warning=FALSE,cache=TRUE,echo=FALSE}
+all_oracle <- lapply(1:1,
+  function(id) {
+    fname <- file.path(base_dir, paste0(id, ".sim.isoforms.results"))
+    result <- read.table(fname, header = TRUE, stringsAsFactors = FALSE) %>%
+      select(target_id = transcript_id, counts = count, tpm = TPM,
+        eff_length = effective_length, length)
+    result
+  })
+```
+
+```{r,warning=FALSE,cache=TRUE}
+all_xprs <- lapply(1:1,
+  function(id)
+  {
+    fname <- file.path(base_dir, id, "express", "results.xprs")
+    read_xprs(fname)
+  })
+
+get_tot_counts <- function(xprs_res) {
+  ret <- xprs_res %>%
+    mutate(rho = fpkm / sum(fpkm)) %>%
+    mutate(alpha = rho * eff_length  / sum(rho * eff_length)) %>%
+    filter(uniq_counts == tot_counts, tot_counts > 10) %>%
+    arrange(desc(tot_counts)) %>%
+    mutate(N = uniq_counts / alpha) %>%
+    summarise(N = median(N)) %>%
+    as.data.frame()
+  ret[1,1]
+}
+
+xprs_tot_counts <- lapply(all_xprs, get_tot_counts)
+```
+
+
+```{r}
+lower_bound <- 1e-100
+small_filter <- function(x) {
+  ifelse(x < lower_bound, 0, x)
+}
+```
+
+```{r,warning=FALSE,cache=TRUE}
+all_rsem <- lapply(1:1,
+  function(id)
+  {
+    fname <- file.path(base_dir, id, "rsem", "out.isoforms.results")
+    read_rsem(fname)
+  })
+```
+```{r,warning=FALSE}
+all_sailfish <- lapply(1:1,
+  function(id)
+  {
+    fname <- file.path(base_dir, id, "sailfish", "quant.sf")
+    x <- read_sailfish(fname)
+    x
+  })
+```
+
+Sailfish counts look odd:
+```{r}
+lapply(all_sailfish, function(x) sum(x$est_counts)) %>%
+  unlist()
+```
+
+Let's correct them with the true total counts:
+
+```{r}
+all_sailfish <- lapply(all_sailfish, function(x) {
+  #x$est_counts <- x$est_counts * (30e6/sum(x$est_counts))
+  x$est_counts <- x$est_counts  / 2
+  x
+})
+```
+
+```{r,warning=FALSE}
+all_kallisto <- lapply(1:1,
+  function(id)
+  {
+    fname <- file.path(base_dir, id, "kallisto", "abundance.h5")
+    read_kallisto_h5(fname, FALSE)$abundance
+  })
+```
+
+```{r}
+all_xprs <- lapply(all_xprs,
+  function(x) {
+    mutate(x, tpm = counts_to_tpm(est_counts, eff_length))
+  })
+```
+
+```{r}
+all_sailfish <- lapply(all_sailfish,
+    function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_xprs <- lapply(all_xprs,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_rsem <- lapply(all_rsem,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_kallisto <- lapply(all_kallisto,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+    })
+```
+
+```{r}
+mr <- lapply(seq_along(all_oracle),
+  function(id)
+  {
+    merge_results(
+      list(all_sailfish[[id]],
+           all_xprs[[id]],
+           all_rsem[[id]],
+           all_kallisto[[id]]
+        ),
+      c("Sailfish",
+        "Bowtie2\n+\neXpress",
+        "Bowtie2\n+\nRSEM",
+        "kallisto"
+        ),
+      all_oracle[[id]])
+  })
+```
+
+```{r}
+no_filt_all <- lapply(mr,
+    function(res) {
+        filtered_summary(res)$est_counts
+    }) %>%
+    rbind_all()
+```
+
+```{r}
+no_filt_all %>%
+  group_by(method) %>%
+  summarise(mean_pearson = mean(pearson),
+            mean_spearman = mean(spearman),
+            mean_mrd = mean(mrd)) %>%
+  arrange(mean_mrd)
+ ```
+
+```{r}
+filter_perfect <- lapply(mr,
+    function(res)
+    {
+        filtered_summary(res)$est_counts
+    }) %>%
+    rbind_all() %>%
+  group_by(method) %>%
+  summarize(mean_pearson = mean(pearson),
+            mean_spearman = mean(spearman),
+    mean_mrd = mean(mrd)
+    ) %>%
+  arrange(mean_mrd)
+```
+
+This next plot shows performance on mean of median relative difference which appears in the paper:
+
+```{r}
+filter_perfect %>%
+  mutate(method = sub('est_counts_', '', as.character(method))) %>%
+  mutate(method = factor(method, arrange(., desc(mean_mrd))[['method']])) %>%
+  ggplot(aes(method, mean_mrd)) +
+    geom_bar(stat="identity", fill = "black") +
+    geom_text(aes(label = round(mean_mrd, 2)),
+      position=position_dodge(width=0.9), vjust=-0.25,
+              colour = "black", size = 5.5) +
+    xlab("method") +
+    theme_classic() +
+    ylab("median relative difference") +
+    theme(legend.position = "none",
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text.y=element_text(size=16),
+          axis.text.x=element_text(size=17),
+          axis.title.y=element_text(size=20, vjust=1),
+          axis.title.x=element_text(size=20) ) +
+      ylim(0, 1)
+ggsave("../img/mrd.png", width = 18.6, height = 8.08)
+```
+
+## tpm
+
+```{r}
+no_filt_tpm <- lapply(mr,
+    function(res)
+    {
+        filtered_summary(res)$tpm
+    }) %>%
+    rbind_all()
+```
+
+```{r}
+no_filt_tpm %>%
+  group_by(method) %>%
+  summarise(mean_pearson = mean(pearson),
+            mean_spearman = mean(spearman),
+            mean_mrd = mean(mrd, na.rm = TRUE)) %>%
+  arrange(mean_mrd)
+```
+
+
+Looking at TPM mrd:
+
+```{r,fig.width=14,fig.height=10}
+no_filt_tpm %>%
+  #filter(!grepl("mon", method)) %>%
+  mutate(method = sub("tpm_", "", method)) %>%
+
+  group_by(method) %>%
+  summarise(mean_pearson = mean(pearson),
+            mean_spearman = mean(spearman),
+            mean_mrd = mean(mrd, na.rm = TRUE)) %>%
+  arrange(mean_mrd) %>%
+  mutate(method = factor(method, arrange(., desc(mean_mrd))[['method']])) %>%
+  ggplot(aes(method, mean_mrd)) +
+    geom_bar(stat="identity", fill = "black") +
+    geom_text(aes(label = round(mean_mrd, 2)),
+      position=position_dodge(width=0.9), vjust=-0.25,
+              colour = "black", size = 5.5) +
+    xlab("method") +
+    # theme_bw() +
+    theme_classic() +
+    ylab("median relative difference") +
+    theme(legend.position = "none",
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text.y=element_text(size=16),
+          axis.text.x=element_text(size=17),
+          axis.title.y=element_text(size=20, vjust=1),
+          axis.title.x=element_text(size=20) ) +
+      ylim(0, 1)
+ggsave("../img/mrd_tpm.png", width = 18.6, height = 8.08)
+```
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
