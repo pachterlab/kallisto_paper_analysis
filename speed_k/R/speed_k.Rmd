@@ -1,0 +1,27 @@
+---
+title: "Dependence of Speed on k-mer Length"
+output:
+  html_document
+---
+
+```{r, echo=FALSE, include=FALSE}
+library('ggplot2')
+library('cowplot')
+library('dplyr')
+```
+
+Load data:
+```{r}
+df <- read.table('../benchmarks/summary.tsv', header = TRUE, stringsAsFactors = FALSE)
+df <- mutate(df, minutes = time / 60)
+```
+
+Plot results
+```{r}
+ggplot(df, aes(factor(k), time/ 60, fill = Type, group = Type)) +
+  geom_bar(stat = 'identity', position = 'dodge') +
+  xlab('k-mer length') +
+  ylab('run time (minutes)') + 
+  scale_y_continuous(breaks=seq(0,8)) + theme_bw()
+```
+<!-- geom_text(aes(label = round(minutes, 2)), position=position_dodge(width=0.9), vjust=-0.25)  -->

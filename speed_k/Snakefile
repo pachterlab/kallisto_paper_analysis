@@ -1,0 +1,67 @@
+include: "../config.py"
+
+INPUT_FILES = '../simulations/NA12716_7/rsem/sim/30000000/1_1.fq.gz ../simulations/NA12716_7/rsem/sim/30000000/1_2.fq.gz'
+KLIST = [i for i in range(21,32,2)]
+
+rule all:
+    input:
+        'R/speed_k.html'
+
+
+########################################################################
+# INDICES
+########################################################################
+
+rule kallisto_index:
+    output:
+        'indices/ind.{k}'
+    threads: 1
+    benchmark: "benchmarks/index.{k}.json"
+    shell:
+        '{KALLISTO} index '
+    	'-k {wildcards.k} '
+        '-i {output} ' +
+        ANNO_FA
+
+
+########################################################################
+# QUANTIFY SIMULATIONS
+########################################################################
+
+# Run kallisto on RSEM simulations
+rule kallisto_k_sim:
+    input:
+        "indices/ind.{k}"
+    output:
+        "out.{k}/abundance.h5"
+    benchmark:
+        "benchmarks/quant.{k}.json"
+    threads: 1
+    shell:
+        '{KALLISTO} quant '
+	'-i indices/ind.{wildcards.k} '
+        '-o out.{wildcards.k} ' +
+        INPUT_FILES
+
+
+rule munge:
+    input:
+        expand("out.{k}/abundance.h5", k = KLIST)
+    output:
+        'benchmarks/summary.tsv'
+    shell:
+        'cd benchmarks; python jsonprint.py > summary.tsv'
+
+
+rule speedk_report:
+     input:
+        'benchmarks/summary.tsv',
+        'R/speed_k.Rmd'
+     output:
+        'R/speed_k.html'
+     shell:
+        source_rmd('R', 'speed_k.Rmd')
+
+
+rule clean:
+    shell: 'rm -rf out.* indices/*'

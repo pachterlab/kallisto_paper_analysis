@@ -1,0 +1,90 @@
+include: "../config.py"
+
+
+rule all:
+    input:
+        'isoforms.txt',
+        # simulated data
+        'results/1_sorted.txt',
+        'results/NA12716_7_30000000_1_simulation_pseudobam_sorted.txt',
+        'results/simulation_comparison_1-NA12716_7_30000000_1_simulation_pseudobam.txt',
+        # real data
+        'results/NA12716_7_rsem_sorted.txt',
+        'results/NA12716_7_real_data_pseudobam_sorted.txt',
+        'results/real_comparison_NA12716_7_rsem-NA12716_7_real_data_pseudobam.txt'
+
+
+rule simulation_comparison:
+    input:
+        'results/{bowtie}_sorted.txt',
+        'results/{simulation}_sorted.txt',
+        'isoforms.txt'
+    output:
+        'results/simulation_comparison_{bowtie}-{simulation}.txt'
+    shell:
+        'python sens.py {input[0]} {input[1]} > {output}'
+
+
+rule real_data_comparison:
+    input:
+        'results/{bowtie}_sorted.txt',
+        'results/{simulation}_sorted.txt',
+        'isoforms.txt'
+    output:
+        'results/real_comparison_{bowtie}-{simulation}.txt'
+    shell:
+        'python sens_real.py {input[0]} {input[1]} > {output}'
+
+
+rule unzip:
+    input:
+        'isoforms.txt.gz'
+    output:
+        'isoforms.txt'
+    shell:
+        'zcat {input} > {output}'
+
+
+rule text_mapping:
+    input:
+        'results/{method}.bam'
+    output:
+        'results/{method}_sorted.txt'
+    shell:
+        'samtools view {input} | cut -f 1,3 | sort -n > {output}'
+
+
+rule kallisto_pseudobam_simulation:
+    input:
+        KALLISTO,
+        "../simulations/{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
+        "../simulations/{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
+        KAL_IDX
+    output:
+        "results/{sample}/rsem/sim/{nreads}/{sim_id}/kallisto",
+        "results/{sample}/rsem/sim/{nreads}/{sim_id}/kallisto/abundance.h5",
+        "results/{sample}_{nreads}_{sim_id}_simulation_pseudobam.bam"
+    threads: 1
+    shell:
+        KALLISTO + " quant -i {KAL_IDX} "
+        "--pseudobam "
+        "-o {output[0]} "
+        "{input[0]} {input[1]} | samtools view -Sb - > {output[2]}"
+
+
+rule kallisto_pseudobam_real_data:
+    input:
+        KALLISTO,
+        "../simulations/{sample}/{sample}_1.fastq.gz",
+        "../simulations/{sample}/{sample}_2.fastq.gz",
+        KAL_IDX
+    output:
+        'results/{sample}/kallisto',
+        'results/{sample}/kallisto/abundance.h5',
+        'results/{sample}_real_data_pseudobam.bam'
+    threads: 1
+    shell:
+        KALLISTO + " quant -i {KAL_IDX} "
+        "--pseudobam "
+        "-o {output[0]} "
+        "{input[0]} {input[1]} | samtools view -Sb - > {output[2]}"

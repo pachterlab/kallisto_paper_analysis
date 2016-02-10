@@ -1,69 +1,199 @@
+include: "../config.py"
 
-# annotations
-ANNO = "../annotation"
-ANNO_PREFIX = "Homo_sapiens.GRCh37.75.cdna.pc"
-ANNO_FA = "{0}/{1}.fa".format( ANNO, ANNO_PREFIX )
+KLIST = [i for i in range(15, 76, 4)]
 
-# tool-specific indices
-IDX = "../index"
+KAL_BIN = 'kallisto_bigK/build/src/kallisto'
+KAL_STO_BIN = 'kallisto_sto/build/src/kallisto'
 
-RSEM_REF = "{0}/{1}_rsem/ref".format( IDX, ANNO_PREFIX )
+SIMULATIONS_DIR = "../simulations"
+ERROR_FUL_FILES = [
+    '{0}/NA12716_7/rsem/sim/30000000/1_1.fq.gz'.format(SIMULATIONS_DIR),
+    '{0}/NA12716_7/rsem/sim/30000000/1_2.fq.gz'.format(SIMULATIONS_DIR)
+    ]
+ERROR_FREE_FILES = ['data/no_error_sim_30000000_1.fq.gz',
+    'data/no_error_sim_30000000_2.fq.gz']
 
-N_THREADS = 20
-
-# list of k to run simulation on
-K_LIST = [i for i in range(15, 76, 4)]
+OUTPUT_DIR = "output"
 
 rule all:
     input:
-        expand("no_error_sim_30000000_1.fq.gz" )
+        KAL_STO_BIN,
+        KAL_BIN,
+        expand(OUTPUT_DIR + "/out_sto_{k}/abundance.h5", k = KLIST),
+        expand(OUTPUT_DIR + "/out_{k}/abundance.h5", k = KLIST),
+        expand(OUTPUT_DIR + "/out_ef_{k}/abundance.h5", k = KLIST),
+        expand(OUTPUT_DIR + "/out_sto_ef_{k}/abundance.h5", k = KLIST),
+        'shredding.html'
 
 
-# one directory with:
-# rsem_params/
-# simulated fastq
-# results with different k
+# build binaries
+rule sto:
+    output:
+        KAL_STO_BIN
+    shell:
+        "git clone -b STO --depth 1 --single-branch https://github.com/pachterlab/kallisto.git kallisto_sto_source; "
+        "cd kallisto_sto_source; "
+        "mkdir build; "
+        "sed -i -e 's/#define MAX_KMER_SIZE 32/#define MAX_KMER_SIZE 96/' src/Kmer.hpp; "
+        "cd build; "
+        "cmake ..; "
+        "make; "
+        "cd ..; cd ..; "
+        "rm -rf kallisto_sto; "
+        "mv kallisto_sto_source kallisto_sto; "
 
-# make rsem simulator inputs
-# just make one rsem simulation
-# run kallisto-sailfish for various values of k
+
+rule bigK:
+    output:
+        KAL_BIN
+    shell:
+        "git clone -b v0.42 --depth 1 --single-branch https://github.com/pachterlab/kallisto.git kallisto_bigK_source; "
+        "cd kallisto_bigK_source; "
+        "mkdir build; "
+        "sed -i -e 's/#define MAX_KMER_SIZE 32/#define MAX_KMER_SIZE 96/' src/Kmer.hpp; "
+        "cd build; "
+        "cmake ..; "
+        "make; "
+        "cd ..; cd ..; "
+        "rm -rf kallisto_bigK; "
+        "mv kallisto_bigK_source kallisto_bigK; "
+
+
+# Simulate from RSEM without errors
+rule rsem_ef_simulate:
+    output:
+       'data/no_error_sim_{n_reads}_1.fq.gz',
+       'data/no_error_sim_{n_reads}_2.fq.gz'
+    threads: 1
+    run:
+        shell("mkdir -p data")
+        cmd = " ".join([
+            "rsem-simulate-reads",
+            ANNO_RSEM,
+            # RSEM_REF,
+            "rsem_params/out.stat/out.model",
+            "{SIMULATIONS_DIR}/NA12716_7/rsem/out.isoforms.results",
+            "0.0",
+            "{wildcards.n_reads}",
+            "data/no_error_sim_{wildcards.n_reads}",
+            "--seed 42"
+            ])
+        shell(cmd)
+        shell("gzip data/no_error_sim*.fq")
+
 
 ########################################################################
 # INDICES
 ########################################################################
 
-# Prepare the main annotation to run RSEM on it
-rule rsem_prepare:
+rule kallisto_index:
     input:
-        ANNO_FA
+        KAL_BIN
     output:
-        "{0}.grp".format( RSEM_REF )
-    run:
-        out_dir = '{0}/{1}_rsem'.format( IDX, ANNO_PREFIX )
-        shell('mkdir -p {0}'.format( out_dir ) )
-        shell('rsem-prepare-reference {0} {1}'.format( ANNO_FA, RSEM_REF ))
-
-
-########################################################################
-# GENERATE SIMULATION
-########################################################################
-
-# Simulate from RSEM without errors
-rule rsem_simulate:
-    output:
-        "no_error_sim_{n_reads}_1.fq.gz",
-        "no_error_sim_{n_reads}_2.fq.gz"
+        'indices/ind_{k,\d*}'
     threads: 1
-    run:
-        cmd = " ".join([
-            "rsem-simulate-reads",
-            RSEM_REF,
-            "rsem_params/out.stat/out.model",
-            "rsem_params/out.isoforms.results",
-            "0.0",
-            "{wildcards.n_reads}",
-            "no_error_sim_{wildcards.n_reads}",
-            "--seed 42"
-            ])
-        shell(cmd)
-        shell("gzip no_error_sim*.fq")
+    shell:
+        KAL_BIN + ' index '
+        '-k {wildcards.k} '
+        '-i {output} ' +
+        ANNO_FA
+
+
+rule kallisto_sto_index:
+    input:
+        KAL_STO_BIN
+    output:
+        'indices/ind_sto_{k}'
+    threads: 1
+    shell:
+        KAL_STO_BIN + ' index '
+        '-k {wildcards.k} '
+        '-i {output} ' +
+        ANNO_FA
+
+
+########################################################################
+# QUANTIFY SIMULATIONS
+########################################################################
+
+rule kallisto_quant:
+    input:
+        'indices/ind_{k,\d*}',
+        ERROR_FUL_FILES[0],
+        ERROR_FUL_FILES[1],
+        KAL_BIN
+    output:
+        '{OUTPUT_DIR}/out_{k, \d*}/abundance.h5'
+    threads: 1
+    shell:
+    	'{KAL_BIN} quant '
+    	'-i indices/ind_{wildcards.k} '
+    	'-o {OUTPUT_DIR}/out_{wildcards.k} ' +
+    	ERROR_FUL_FILES[0] + ' ' + ERROR_FUL_FILES[1]
+
+
+rule kallisto_sto_quant:
+    input:
+        'indices/ind_sto_{k, \d*}',
+        ERROR_FUL_FILES[0],
+        ERROR_FUL_FILES[1],
+        KAL_STO_BIN
+    output:
+        '{OUTPUT_DIR}/out_sto_{k, \d*}/abundance.h5'
+    threads: 1
+    shell:
+    	'{KAL_STO_BIN} quant '
+    	'--sto '
+    	'-l 180 '
+    	'-i indices/ind_sto_{wildcards.k} '
+    	'-o {OUTPUT_DIR}/out_sto_{wildcards.k} ' +
+    	ERROR_FUL_FILES[0] + ' ' + ERROR_FUL_FILES[1]
+
+
+rule kallisto_quant_error_free:
+    input:
+        'indices/ind_{k,\d*}',
+        ERROR_FREE_FILES[0],
+        ERROR_FREE_FILES[1],
+        KAL_BIN
+    output:
+        '{OUTPUT_DIR}/out_ef_{k}/abundance.h5'
+    threads: 1
+    shell:
+        '{KAL_BIN} quant '
+        '-i indices/ind_{wildcards.k} '
+        '-o {OUTPUT_DIR}/out_ef_{wildcards.k} ' +
+        ERROR_FREE_FILES[0] + ' ' + ERROR_FREE_FILES[1]
+
+
+rule kallisto_sto_quant_error_free:
+    input:
+        'indices/ind_sto_{k,\d*}',
+        ERROR_FREE_FILES[0],
+        ERROR_FREE_FILES[1],
+        KAL_STO_BIN
+    output:
+        '{OUTPUT_DIR}/out_sto_ef_{k,\d*}/abundance.h5'
+    threads: 1
+    shell:
+        '{KAL_STO_BIN} quant '
+        '--sto '
+        '-l 180 '
+        '-i indices/ind_sto_{wildcards.k} '
+        '-o {OUTPUT_DIR}/out_sto_ef_{wildcards.k} ' +
+        ERROR_FREE_FILES[0] + ' ' + ERROR_FREE_FILES[1]
+
+
+rule shredding_report:
+    input:
+        'shredding.Rmd',
+        expand(OUTPUT_DIR + "/out_sto_{k}/abundance.h5", k = KLIST),
+        expand(OUTPUT_DIR + "/out_{k}/abundance.h5", k = KLIST),
+        expand(OUTPUT_DIR + "/out_ef_{k}/abundance.h5", k=KLIST),
+        expand(OUTPUT_DIR + "/out_sto_ef_{k}/abundance.h5", k=KLIST)
+    output:
+        'shredding.html',
+        'img/shredding_error_free.png',
+        'img/shredding_error.png'
+    shell:
+        source_rmd('.', 'shredding.Rmd')

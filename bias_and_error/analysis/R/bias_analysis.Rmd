@@ -13,6 +13,7 @@ Let's just load some packages we need:
 library("data.table")
 library("dplyr")
 library("sleuth")
+library("mamabear")
 ```
 
 # Preliminaries

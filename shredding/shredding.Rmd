@@ -1,0 +1,294 @@
+---
+title: "Shredding analysis"
+output:
+  html_document
+---
+
+```{r }
+library("dplyr")
+library(reshape2)
+base_dir <- "."
+library("ggplot2")
+```
+
+Load estimates.
+
+```{r ,cache=TRUE,echo=FALSE}
+counts_to_tpm <- function(est_counts, eff_len) {
+  stopifnot( length(eff_len) == length(est_counts) )
+
+  which_valid <- which(eff_len > 0)
+
+  num <- (est_counts / eff_len)
+  num[-which_valid] <- 0
+  denom <- sum(num)
+
+  (1e6 * num) / denom
+}
+
+read_kallisto_h5 <- function(fname, read_bootstrap = TRUE) {
+  stopifnot(is(fname, "character"))
+
+  fname <- path.expand(fname)
+
+  if (!file.exists(fname)) {
+    stop(paste0("Can't file file: '", fname, "'"))
+  }
+
+  target_id <- as.character(rhdf5::h5read(fname, "aux/ids"))
+  abund <- data.frame(target_id = target_id, stringsAsFactors = FALSE)
+  abund$est_counts <- as.numeric(rhdf5::h5read(fname, "est_counts"))
+  abund$eff_len <- as.numeric(rhdf5::h5read(fname, "aux/eff_lengths"))
+  abund$len <- as.numeric(rhdf5::h5read(fname, "aux/lengths"))
+
+  bs_samples <- list()
+  if (read_bootstrap) {
+    num_bootstrap <- as.integer(rhdf5::h5read(fname, "aux/num_bootstrap"))
+    if (num_bootstrap > 0) {
+      cat("Found ", num_bootstrap, " bootstrap samples\n")
+      bs_samples <- lapply(0:(num_bootstrap[1]-1), function(i)
+        {
+          .read_bootstrap_hdf5(fname, i, abund)
+        })
+    } else {
+      cat("No bootstrap samples found\n ")
+    }
+  }
+
+  abund$tpm <- counts_to_tpm(abund$est_counts, abund$eff_len)
+
+  invisible(structure(
+      list(abundance = abund,
+        bootstrap = bs_samples),
+      class = "kallisto"))
+}
+
+
+
+all_sto_fname <- Sys.glob("output/out_sto_[0-9]*/abundance.h5")
+all_sto <- lapply(all_sto_fname, function(fn) read_kallisto_h5(fn, read_bootstrap = FALSE)$abundance)
+all_sto_id <- all_sto_fname %>%
+  sub("/abundance.h5", "", .)
+all_sto_id <- data.frame(sample = all_sto_id)
+
+all_kal_fname <- Sys.glob("output/out_[0-9]*/abundance.h5")
+all_kal <- lapply(all_kal_fname, function(fn) read_kallisto_h5(fn, read_bootstrap = FALSE)$abundance)
+all_kal_id <- all_kal_fname %>%
+  sub("/abundance.h5", "", .)
+all_kal_id <- data.frame(sample = all_kal_id)
+
+all_sto_efree_fname <- Sys.glob("output/out_sto_ef_[0-9]*/abundance.h5")
+all_sto_efree <- lapply(all_sto_efree_fname, function(fn) read_kallisto_h5(fn, read_bootstrap = FALSE)$abundance)
+all_sto_efree_id <- all_sto_efree_fname %>%
+  sub("/abundance.h5", "", .)
+all_sto_efree_id <- data.frame(sample = all_sto_efree_id)
+
+all_kal_efree_fname <- Sys.glob("output/out_ef_[0-9]*/abundance.h5")
+all_kal_efree <- lapply(all_kal_efree_fname, function(fn) read_kallisto_h5(fn, read_bootstrap = FALSE)$abundance)
+all_kal_efree_id <- all_kal_efree_fname %>%
+  sub("/abundance.h5", "", .)
+all_kal_efree_id <- data.frame(sample = all_kal_efree_id)
+```
+
+Load oracle
+
+```{r}
+fname <- file.path(base_dir, "../simulations/NA12716_7/rsem/sim/30000000","1.sim.isoforms.results")
+oracle <- read.table(fname, header = TRUE, stringsAsFactors = FALSE) %>%
+      select(target_id = transcript_id, counts = count, tpm = TPM,
+        eff_length = effective_length, length)
+
+fname_efree <- file.path(base_dir,"data/no_error_sim_30000000.sim.isoforms.results")
+oracle_efree <- read.table(fname_efree, header = TRUE, stringsAsFactors = FALSE) %>%
+      select(target_id = transcript_id, counts = count, tpm = TPM,
+        eff_length = effective_length, length)
+```
+
+Prepare merged results
+
+```{r}
+merge_results <- function(exp_list, exp_labels, oracle) {
+  stopifnot( is(exp_list, "list") )
+  stopifnot( length(exp_list) == length(exp_labels) )
+
+  exp_list <- lapply(seq_along(exp_list),
+    function(i)
+    {
+      res <- exp_list[[i]] %>%
+        select(target_id, tpm, est_counts) %>%
+        data.table::data.table()
+      data.table::setnames(res, "tpm", paste0("tpm_", exp_labels[i]))
+      data.table::setnames(res, "est_counts", paste0("est_counts_", exp_labels[i]))
+    })
+
+  oracle <- oracle %>%
+    rename(tpm_oracle = tpm, est_counts_oracle = counts)
+
+  all_res <- Reduce(function(x, y) inner_join(x, y, by = c("target_id")), exp_list)
+
+
+  melt_by <- function(data, unit_by) {
+    m_unit <- data %>%
+      select(target_id, starts_with(unit_by)) %>%
+      reshape2::melt(id.vars = "target_id", variable.name = "method")
+    ret <- data.table::data.table(oracle) %>%
+      select(target_id, starts_with(unit_by)) %>%
+      inner_join(data.table::data.table(m_unit), by = "target_id") %>%
+      rename(estimate = value)
+    data.table::setnames(ret, paste0(unit_by, "_oracle"), "oracle")
+    ret
+  }
+
+  m_tpm <- melt_by(all_res, "tpm")
+  m_est_counts <- melt_by(all_res, "est_counts")
+
+  all_res <- all_res %>%
+    inner_join(data.table::data.table(oracle), by = "target_id")
+
+  structure(list(all_data = all_res, m_tpm = m_tpm, m_est_counts = m_est_counts),
+    class = "merged_res")
+}
+
+scaled_error <- function(estimate, truth) {
+  estimate <- estimate/sum(estimate)
+  truth <- truth/sum(truth)
+  2 *(estimate - truth)  / (estimate + truth)
+}
+
+percent_error <- function(estimate, truth) {
+  (estimate - truth) / truth
+}
+
+filtered_summary <- function(mres, filter_exp) {
+  stopifnot( is(mres, "merged_res") )
+  do_filter <- if (missing(filter_exp)) {
+    FALSE
+  } else {
+    filter_exp <- deparse(substitute(filter_exp))
+    filtered_ids <- mres$all_data %>%
+      filter_(.dots = list(filter_exp)) %>%
+      select(target_id)
+    TRUE
+  }
+
+  both_res <- lapply(list(mres$m_tpm, mres$m_est_counts),
+    function(res)
+    {
+      if (do_filter) {
+        res <- data.table(res) %>%
+          inner_join(data.table(filtered_ids), by = c("target_id"))
+      }
+
+      res %>%
+        group_by(method) %>%
+        summarise(
+          pearson = cor(estimate, oracle, method = "pearson"),
+          spearman = cor(estimate, oracle, method = "spearman"),
+          med_scaled_err = median(abs(scaled_error(estimate, oracle)),
+              na.rm = TRUE)
+          #med_per_err = median(abs(percent_error(estimate, oracle)))
+          )
+    })
+
+  setNames(both_res, c("tpm", "est_counts"))
+}
+
+
+klist <- seq(15,75,4)
+mr <- lapply(seq_along(klist),
+  function(id)
+  {
+    x <- merge_results(
+      list(all_kal[[id]], all_sto[[id]]),
+      c("kallisto", "k-mers"),
+      oracle)
+    x$m_est_counts <- x$m_est_counts %>%
+      group_by(method) %>%
+      mutate(estimate = estimate / sum(estimate), oracle = oracle / sum(oracle))
+    x
+  })
+
+mr_efree <- lapply(seq_along(klist),
+  function(id)
+  {
+    x <- merge_results(
+      list(all_kal_efree[[id]], all_sto_efree[[id]]),
+      c("kallisto", "k-mers"),
+      oracle_efree)
+    x$m_est_counts <- x$m_est_counts %>% group_by(method) %>% mutate(estimate = estimate / sum(estimate), oracle = oracle / sum(oracle))
+    x
+  })
+
+no_filt_all <- lapply(mr,
+    function(res)
+    {
+        filtered_summary(res)$est_counts
+    }) %>%
+    rbind_all()
+no_filt_all$k <- rep(klist,each=2)
+
+no_filt_all_efree <- lapply(mr_efree,
+    function(res)
+    {
+        filtered_summary(res)$est_counts
+    }) %>%
+    rbind_all()
+no_filt_all_efree$k <- rep(klist,each=2)
+```
+
+```{r}
+temp <- mr[[5]]$m_est_counts %>%
+  group_by(method) %>%
+  mutate(diff = scaled_error(estimate, oracle))
+ggplot(temp, aes(abs(diff))) +
+  stat_ecdf(aes(color = method))
+```
+
+
+Compare methods
+```{r}
+k_lims <- range(klist) + c(-1, 1)
+no_filt_all %>%
+  mutate(method = sub("est_counts_", "", method)) %>%
+  ggplot(aes(k, med_scaled_err, group = method, colour = method)) +
+    geom_point(aes(shape = method), size = 3.5) +
+    geom_line(size = 1) +
+    theme_bw(20) +
+    scale_x_continuous(
+      breaks = no_filt_all$k,
+      labels = no_filt_all$k
+      ) +
+    theme(axis.text=element_text(size=20),
+      axis.title.y=element_text(size=20, vjust=1),
+      axis.title.x=element_text(size=20)
+      ) +
+    theme(
+      legend.text=element_text(size=17),
+      legend.title=element_text(size=17)) +
+    theme(legend.position = c(0.75, 0.75)) +
+    ylab("median relative difference")
+ggsave('img/shredding_error.png')
+```
+
+```{r}
+no_filt_all_efree %>%
+  mutate(method = sub("est_counts_", "", method)) %>%
+  ggplot(aes(k, med_scaled_err, group = method, colour = method)) +
+    geom_point(aes(shape = method), size = 3.5) +
+    geom_line(size = 1) +
+    theme_bw(20) +
+    scale_x_continuous(
+      breaks = no_filt_all$k,
+      labels = no_filt_all$k
+      ) +
+    theme(axis.text=element_text(size=20),
+      axis.title.y=element_text(size=20, vjust=1),
+      axis.title.x=element_text(size=20)
+      ) +
+    theme(
+      legend.text=element_text(size=17),
+      legend.title=element_text(size=17)) +
+    theme(legend.position = c(0.75, 0.75)) +
+    ylab("median relative difference")
+ggsave('img/shredding_error_free.png')
+```

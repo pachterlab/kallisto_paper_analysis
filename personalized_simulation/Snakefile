@@ -1,106 +1,69 @@
+include: "../config.py"
+
 HUMAN_PRE = "NA12716_7"
 
-# annotations
-ANNO = "../annotation"
-ANNO_PREFIX = "NA12716"
-ANNO_FA = "{0}/{1}.fa".format( ANNO, ANNO_PREFIX )
-#ANNO_GTF = "{0}/Homo_sapiens.GRCh37.75.sub.gtf".format( ANNO )
-#ANNO_TRANS_GTF = "{0}/Homo_sapiens.GRCh37.75.sub_trans_only.gtf".format( ANNO )
+PSIM_ANNO_PREFIX = "NA12716"
+PSIM_ANNO_FA = "{0}/{1}.fa".format( ANNO, PSIM_ANNO_PREFIX )
 
-# genomes
-#GENOME_FA = "../GRCh37_75/Homo_sapiens.GRCh37.75.dna.primary_assembly.fa"
-#GENOME_BWT_IDX = "../GRCh37_75/Homo_sapiens.GRCh37.75.dna.primary_assembly"
+PSIM_BWT_IDX = "../{0}/{1}".format( IDX, PSIM_ANNO_PREFIX )
 
-# tool-specific indices
-IDX = "../index"
-BWT_IDX = "../index/{0}".format( ANNO_PREFIX )
-
-RSEM_REF = "{0}/{1}_rsem/ref".format( IDX, ANNO_PREFIX )
+RSEM_REF = "{0}/{1}_rsem/ref".format( IDX, PSIM_ANNO_PREFIX )
 RSEM_REF_GRP = "{0}.grp".format( RSEM_REF )
 
-KAL_IDX = "{0}/{1}.kidx".format( IDX, ANNO_PREFIX )
-SALMON_IDX = "{0}/{1}_salmon_idx".format( IDX, ANNO_PREFIX )
-SAILFISH_IDX = "{0}/{1}_sailfish_idx".format( IDX, ANNO_PREFIX )
-
-# binaries
-FLUX = "~/Downloads/flux-capacitor-1.6.1/bin/flux-capacitor"
-
-N_THREADS = 20
+PSIM_KAL_IDX = "{0}/{1}.kidx".format( IDX, PSIM_ANNO_PREFIX )
+PSIM_SALMON_IDX = "{0}/{1}_salmon_idx".format( IDX, PSIM_ANNO_PREFIX )
+PSIM_SAILFISH_IDX = "{0}/{1}_sailfish_idx".format( IDX, PSIM_ANNO_PREFIX )
 
 # total number of simulations
 SIMS_LIST = [i for i in range(1, 2)]
 
+
 rule all:
     input:
-#        # generate the salmon index
-#        SALMON_IDX,
-#        # quantify HUMAN_PRE with RSEM
-        "{0}/rsem/out.isoforms.results".format( HUMAN_PRE ),
-#        # generate simulations using RSEM
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{sims}_1.fq.gz", sims = SIMS_LIST),
-
-#        # quantify using kallisto
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto/abundance.h5", id = SIMS_LIST ),
-#        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto_bs/abundance.h5", id = SIMS_LIST ),
+        "analysis/R/NA12716_7_rsem.html"
 
 
-#        # quantify using eXpress
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/express/results.xprs", id = SIMS_LIST ),
-#
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/rsem/out.isoforms.results", id = SIMS_LIST ),
-#        SAILFISH_IDX,
-        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/sailfish/quant.sf", id = SIMS_LIST )
-
-#        # quantify using salmon
-#        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/salmon/quant.sf", id = SIMS_LIST ),
 ########################################################################
-# INDICES
+# Indices
 ########################################################################
 
-# TODO: show bowtie2 index generation
-
-# Prepare the main annotation to run RSEM on it
+# prepare the main annotation to run RSEM on it
 rule rsem_prepare:
     input:
-        ANNO_FA
+        PSIM_ANNO_FA
     output:
         "{0}.grp".format( RSEM_REF )
     run:
-        out_dir = '{0}/{1}_rsem'.format( IDX, ANNO_PREFIX )
+        out_dir = '{0}/{1}_rsem'.format( IDX, PSIM_ANNO_PREFIX )
         shell('mkdir -p {0}'.format( out_dir ) )
-        shell('rsem-prepare-reference {0} {1}'.format( ANNO_FA, RSEM_REF ))
+        shell('rsem-prepare-reference {0} {1}'.format( PSIM_ANNO_FA, RSEM_REF ))
 
-# generate the salmon index
-rule salmon_index:
-    output:
-        SALMON_IDX
-    threads: N_THREADS
-    shell:
-        'salmon index '
-        '-t ' + ANNO_FA + ' '
-        '-i {output} '
 
 rule sailfish_index:
     output:
-        SAILFISH_IDX 
+        SAILFISH,
+        PSIM_SAILFISH_IDX 
     threads: N_THREADS
     shell:
-        'sailfish index '
-        '-t ' + ANNO_FA + ' '
+        SAILFISH + ' index '
+        '-t ' + PSIM_ANNO_FA + ' '
         '-o {output} '
         '-k 21'
 
+
 rule kallisto_index:
     output:
-        KAL_IDX
+        KALLISTO,
+        PSIM_KAL_IDX
     threads: 1
     shell:
-        'kallisto index '
-        '-i ' + KAL_IDX + ' ' +
-        ANNO_FA
+        KALLISTO + ' index '
+        '-i ' + PSIM_KAL_IDX + ' ' +
+        PSIM_ANNO_FA
+
 
 ########################################################################
-# REAL DATA TO ACT AS SEED FOR SIMULATIONS
+# Real data to act as a seed for simulations
 ########################################################################
 
 # align for RSEM on "real" data
@@ -122,13 +85,14 @@ rule rsem_align:
         '--no-mixed --no-discordant '
         '--seed 42 '
         '-k 200 '
-        '-x ' + BWT_IDX + ' '
+        '-x ' + PSIM_BWT_IDX + ' '
         '-p {threads} '
         '-1 {input[0]} '
         '-2 {input[1]} | '
         'samtools view -Sb - > {output}'
 
-# Run RSEM on a "real" sample
+
+# run RSEM on a "real" sample
 rule rsem:
     input:
         RSEM_REF_GRP,
@@ -148,8 +112,9 @@ rule rsem:
              "{input[1]}", RSEM_REF, out_prefix])
         shell(cmd)
 
+
 ########################################################################
-# GENERATE SIMULATIONS
+# Generate simulations
 ########################################################################
 
 # Simulate from RSEM using errors
@@ -176,8 +141,9 @@ rule rsem_simulate:
         shell(cmd)
         shell("gzip {0}*.fq".format( res ))
 
+
 ########################################################################
-# ALIGNMENTS
+# Alignments
 ########################################################################
 
 # run bowtie2 on RSEM simulated data for eXpress
@@ -194,11 +160,12 @@ rule bwt2_express_rsem_sim:
         'bowtie2 '
         '--no-mixed --no-discordant --rdg 6,5 --rfg 6,5 --score-min L,-.6,-.4 '
         '-k 200 '
-        '-x ' + BWT_IDX + ' '
+        '-x ' + PSIM_BWT_IDX + ' '
         '-p {threads} '
         '-1 {input[0]} '
         '-2 {input[1]} |'
         'samtools view -Sb - > {output}'
+
 
 # bwt2 alignments for RSEM
 rule bwt2_rsem_rsem_sim:
@@ -218,74 +185,36 @@ rule bwt2_rsem_rsem_sim:
         '--no-mixed --no-discordant '
         '--seed 42 '
         '-k 200 '
-        '-x ' + BWT_IDX + ' '
+        '-x ' + PSIM_BWT_IDX + ' '
         '-p {threads} '
         '-1 {input[0]} '
         '-2 {input[1]} | '
         'samtools view -Sb - > {output}'
 
-#rule tophat_rsem_sim:
-#    input:
-#        "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
-#        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
-#        ANNO_GTF
-#    output:
-#        "{sample}/rsem/sim/{nreads}/{sim_id}/alignments/tophat/accepted_hits.bam" 
-#    benchmark:
-#        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/tophat.json"
-#    threads: N_THREADS
-#    message:
-#        'Running TopHat2 (thr = {threads}) on {input}'
-#    shell:
-#        'tophat2 '
-#        '-G {ANNO_GTF} '
-#        '--transcriptome-index ' + IDX + '/tophat_{ANNO_GTF} '
-#        '--transcriptome-only '
-#        '-p {threads} '
-#        '-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/alignments/tophat '
-#        + GENOME_BWT_IDX + ' '
-#        '{input[0]} {input[1]}'
 
 ########################################################################
-# QUANTIFY SIMULATIONS
+# Quantify simulations
 ########################################################################
 
-# TODO: sailfish quant
 rule sailfish_rsem_sim:
     input:
+        SAILFISH,
         "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
         "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
-        SAILFISH_IDX
+        PSIM_SAILFISH_IDX
     output:
         '{sample}/rsem/sim/{nreads}/{sim_id}/sailfish/quant.sf'
     benchmark:
         'benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/sailfish.json'
     threads: N_THREADS
     shell:
-        'sailfish quant '
-        '-i {SAILFISH_IDX} '
+        SAILFISH + ' quant '
+        '-i {PSIM_SAILFISH_IDX} '
         '-l "T=PE:S=U" '
         '-1 <(zcat {input[0]}) -2 <(zcat {input[1]}) '
         '-p {threads} '
         '-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/sailfish'
 
-#rule cufflinks_rsem_sim:
-#    input:
-#        ANNO_GTF,
-#        rules.tophat_rsem_sim.output
-#    output:
-#        '{sample}/rsem/sim/{nreads}/{sim_id}/cufflinks/isoforms.fpkm_tracking'
-#    benchmark:
-#        'benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/cufflinks.json'
-#    threads: N_THREADS
-#    shell:
-#        'cufflinks '
-#        '-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/cufflinks '
-#        '-p {threads} '
-#        '-u '
-#        '--quiet '
-#        '--GTF {ANNO_GTF} '
-#        '{input[1]}'
 
 rule rsem_rsem_sim:
     input:
@@ -305,26 +234,8 @@ rule rsem_rsem_sim:
             "--no-bam-output", "-p {threads}", "{input}", RSEM_REF, out_prefix])
         shell(cmd)
 
-# Run Salmon on RSEM simulations
-rule salmon_rsem_sim:
-    input:
-        "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
-        "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz"
-    output:
-        "{sample}/rsem/sim/{nreads}/{sim_id}/salmon/quant.sf"
-    benchmark:
-        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/salmon.json"
-    threads:
-        1
-    shell:
-        'salmon quant '
-        '-i ' + SALMON_IDX + ' '
-        '-p {threads} '
-        '--libType IU '
-        '-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/salmon '
-        '-1 <(zcat {input[0]}) -2 <(zcat {input[1]})'
 
-# Run eXpress on RSEM simulations
+# run eXpress on RSEM simulations
 rule express_rsem_sim:
     input:
         "{sample}/rsem/sim/{nreads}/{sim_id}/alignments/bwt2.bam"
@@ -341,15 +252,17 @@ rule express_rsem_sim:
         '-H {wildcards.sample}/*.hap '
         '-o {wildcards.sample}/rsem/sim/'
         '{wildcards.nreads}/{wildcards.sim_id}/express/ ' +
-        ANNO_FA + ' '
+        PSIM_ANNO_FA + ' '
         '{input}'
 
-# Run kallisto on RSEM simulations
+
+# run kallisto on RSEM simulations
 rule kallisto_rsem_sim:
     input:
+        KALLISTO,
         "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
         "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
-        KAL_IDX
+        PSIM_KAL_IDX
     output:
         "{sample}/rsem/sim/{nreads}/{sim_id}/kallisto/abundance.h5"
     benchmark:
@@ -358,16 +271,17 @@ rule kallisto_rsem_sim:
     message:
         "kallisto quant on {input[0]} {output}"
     shell:
-        "kallisto quant -i {KAL_IDX} "
+        KALLISTO + " quant -i {PSIM_KAL_IDX} "
         "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}"
         "/{wildcards.sim_id}/kallisto {input[0]} {input[1]}"
 
-# Run kallisto on RSEM simulations
+
+# run kallisto on RSEM simulations
 rule kallisto_rsem_sim_bs:
     input:
         "{sample}/rsem/sim/{nreads}/{sim_id}_1.fq.gz",
         "{sample}/rsem/sim/{nreads}/{sim_id}_2.fq.gz",
-        KAL_IDX
+        PSIM_KAL_IDX
     output:
         "{sample}/rsem/sim/{nreads}/{sim_id}/kallisto_bs/abundance.h5"
     benchmark:
@@ -376,44 +290,24 @@ rule kallisto_rsem_sim_bs:
     message:
         "kallisto quant w/ bs on {input[0]} {output}"
     shell:
-        "kallisto quant -i {KAL_IDX} "
+        "kallisto quant -i {PSIM_KAL_IDX} "
         "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}"
         "/{wildcards.sim_id}/kallisto_bs "
         "-b 100 "
         "{input[0]} {input[1]}"
 
-#rule flux_rsem_sim:
-#    input:
-#        rules.tophat_rsem_sim.output,
-#        ANNO_TRANS_GTF
-#    output:
-#        "{sample}/rsem/sim/{nreads}/{sim_id}/flux/output"
-#    benchmark:
-#        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/flux.json"
-#    threads: N_THREADS
-#    shell:
-#        FLUX + " "
-#        "-a {ANNO_TRANS_GTF} "
-#        "-i {input[0]} "
-#        "--threads {threads} "
-#        "-o {wildcards.sample}/rsem/sim/{wildcards.nreads}/{wildcards.sim_id}/flux/output "
 
-
-########################################################################
-# Gene level analysis
-########################################################################
-
-#rule htseq_rsem_sim:
-#    input:
-#        rules.tophat_rsem_sim.output,
-#        ANNO_GTF
-#    output:
-#        "{sample}/rsem/sim/{nreads}/{sim_id}/htseq/gene_counts.txt"
-#    benchmark:
-#        "benchmarks/{sample}/rsem/sim/{nreads}/{sim_id}/htseq_gene.json"
-#    threads: 1
-#    shell:
-#        "htseq-count --stranded=no "
-#        "-f bam "
-#        "{input[0]} {input[1]} >"
-#        "{output}"
+rule psim_report:
+     input:
+        "analysis/R/NA12716_7_rsem.Rmd",
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{sims}_1.fq.gz", sims = SIMS_LIST),
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/kallisto/abundance.h5", id = SIMS_LIST ),
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/express/results.xprs", id = SIMS_LIST ),
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/rsem/out.isoforms.results", id = SIMS_LIST ),
+        expand(HUMAN_PRE + "/rsem/sim/30000000/{id}/sailfish/quant.sf", id = SIMS_LIST )        
+     output:
+        "analysis/R/NA12716_7_rsem.html"
+     threads:
+        1
+     shell:
+        source_rmd('analysis/R', 'NA12716_7_rsem.Rmd')

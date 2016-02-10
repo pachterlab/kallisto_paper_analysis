@@ -1,9 +1,9 @@
-ANNO_PRE = 'simdata/hg19-ucsc_transcripts'
-ANNO_FA = 'simdata/hg19-ucsc_transcripts.fa.gz'
+include: "../config.py"
 
-KAL_IDX = 'index/{0}.kidx'.format( ANNO_PRE )
+BAE_ANNO_PRE = 'simdata/hg19-ucsc_transcripts'
+BAE_ANNO_FA = 'simdata/hg19-ucsc_transcripts.fa.gz'
 
-KALLISTO = '/home/hjp/dev_versions/kallisto_elen'
+BAE_KAL_IDX = 'index/{0}.kidx'.format( BAE_ANNO_PRE )
 
 SIMS = ['bias_and_error', 'error_only']
 
@@ -14,6 +14,7 @@ rule all:
         expand('results/{sim}/kallisto/abundance.h5', sim = SIMS),
         expand('results/{sim}/kallisto_bias/abundance.h5', sim = SIMS),
         'analysis/R/bias_analysis.html'
+
 
 rule download_express_sim:
     output:
@@ -30,23 +31,27 @@ rule download_express_sim:
         '-nd '
         'http://lmcb.math.berkeley.edu/eXpress/simdata/'
 
+
 rule kal_idx:
     input:
-        ANNO_FA
+        KALLISTO,
+        BAE_ANNO_FA
     output:
-        KAL_IDX
+        BAE_KAL_IDX
     threads:
         1
     shell:
         '{KALLISTO} index '
-        '-i {KAL_IDX} '
-        '{ANNO_FA}'
+        '-i {BAE_KAL_IDX} '
+        '{BAE_ANNO_FA}'
+
 
 rule kallisto_bias:
     input:
+        KALLISTO,
         'simdata/{sim}/sim_1.fa.gz',
         'simdata/{sim}/sim_2.fa.gz',
-        KAL_IDX
+        BAE_KAL_IDX
     output:
         'results/{sim}/kallisto_bias',
         'results/{sim}/kallisto_bias/abundance.h5'
@@ -56,16 +61,18 @@ rule kallisto_bias:
         1
     shell:
         '{KALLISTO} quant '
-        '-i {KAL_IDX} '
+        '-i {BAE_KAL_IDX} '
         '-o {output[0]} '
         '--bias '
         '{input[0]} {input[1]}'
 
+
 rule kallisto:
     input:
+        KALLISTO,
         'simdata/{sim}/sim_1.fa.gz',
         'simdata/{sim}/sim_2.fa.gz',
-        KAL_IDX
+        BAE_KAL_IDX
     output:
         'results/{sim}/kallisto',
         'results/{sim}/kallisto/abundance.h5'
@@ -75,23 +82,10 @@ rule kallisto:
         1
     shell:
         '{KALLISTO} quant '
-        '-i {KAL_IDX} '
+        '-i {BAE_KAL_IDX} '
         '-o {output[0]} '
         '{input[0]} {input[1]}'
 
-#rule get_true_counts:
-#    input:
-#        'simdata/{sim}/sim_1.fa.gz'
-#    output:
-#        'simdata/{sim}/counts.txt'
-#    shell:
-#        'zcat {input} | '
-#        'grep \'^>\' | '
-#        'tr -d \'>\' | '
-#        'awk \'BEGIN {{FS=":"}} {{print $2}}\' | '
-#        'sort | '
-#        'uniq -c >'
-#        '{output}'
 
 rule get_true_counts:
     input:
@@ -104,21 +98,19 @@ rule get_true_counts:
         'python analysis/count_reads.py '
         '<(zcat {input}) > '
         '{output}'
+
     
-rule gen_report:
+rule bias_report:
     input:
+        'analysis/R/bias_analysis.Rmd',
         expand('simdata/{sim}/counts.txt', sim = SIMS)
     output:
         'analysis/R/bias_analysis.html'
     threads:
         1
-    shell:
-        '''
-        Rscript \
-        --default-packages=utils,methods,stats,grDevices,graphics \
-        -e 'setwd("analysis/R")' \
-        -e 'rmarkdown::render("bias_analysis.Rmd")'
-        '''
+    run:
+        source_rmd('analysis/R', 'bias_analysis.Rmd')
+
 
 rule clean:
     shell:

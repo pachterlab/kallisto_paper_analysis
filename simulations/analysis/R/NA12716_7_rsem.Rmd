@@ -11,7 +11,9 @@ library("dplyr")
 library("reshape2")
 library("sleuth")
 library("ggplot2")
-library("rjson")
+library('jsonlite')
+library('mamabear')
+library('scales')
 ```
 
 # Loading the results
@@ -19,7 +21,8 @@ library("rjson")
 Let's first get info on all the data
 
 ```{r,echo=FALSE}
-base_dir <- "~/kallisto_paper_analysis/simulations/NA12716_7/rsem/sim/30000000"
+base_dir <- "../../NA12716_7/rsem/sim/30000000"
+# base_dir <- "~/kallisto_paper_analysis/simulations_hisat/NA12716_7/rsem/sim/30000000"
 ```
 
 Helper function for cufflinks since it doesn't output effective length:
@@ -35,16 +38,15 @@ Load all data:
 
 ```{r,warning=FALSE,cache=TRUE,echo=FALSE}
 all_oracle <- lapply(1:20,
-  function(id)
-  {
+  function(id) {
     fname <- file.path(base_dir, paste0(id, ".sim.isoforms.results"))
-    read.table(fname, header = TRUE, stringsAsFactors = FALSE) %>%
+    result <- read.table(fname, header = TRUE, stringsAsFactors = FALSE) %>%
       select(target_id = transcript_id, counts = count, tpm = TPM,
         eff_length = effective_length, length)
+    result
   })
-
-oracle_mfl <- lapply(all_oracle, get_oracle_mean_fl)
 ```
+
 ```{r,warning=FALSE,cache=TRUE}
 all_xprs <- lapply(1:20,
   function(id)
@@ -56,7 +58,7 @@ all_xprs <- lapply(1:20,
 get_tot_counts <- function(xprs_res) {
   ret <- xprs_res %>%
     mutate(rho = fpkm / sum(fpkm)) %>%
-    mutate(alpha = rho * eff_length  / sum(rho * eff_length)) %>%  
+    mutate(alpha = rho * eff_length  / sum(rho * eff_length)) %>%
     filter(uniq_counts == tot_counts, tot_counts > 10) %>%
     arrange(desc(tot_counts)) %>%
     mutate(N = uniq_counts / alpha) %>%
@@ -65,16 +67,61 @@ get_tot_counts <- function(xprs_res) {
   ret[1,1]
 }
 
-xprs_tot_counts <- lapply(all_xprs, get_tot_counts)  
+xprs_tot_counts <- lapply(all_xprs, get_tot_counts)
 ```
 
 ```{r,warning=FALSE,cache=TRUE}
-all_cufflinks <- lapply(1:20,
-  function(id)
-  {
-    fname <- file.path(base_dir, id, "cufflinks", "isoforms.fpkm_tracking")
-    read_cufflinks(fname, oracle_mfl[[id]]) %>%
-      mutate(est_counts = est_counts * xprs_tot_counts[[id]])
+all_cufflinks_tophat <- lapply(1:20,
+  function(id) {
+    fname <- file.path(base_dir, id, "cufflinks/tophat", "isoforms.fpkm_tracking")
+
+    cufflinks <- read_cufflinks(fname, oracle_mfl[[id]])
+    cufflinks <- inner_join(cufflinks,
+      select(all_oracle[[id]], target_id, eff_length),
+      by = 'target_id')
+    stopifnot(sum(is.na(cufflinks$eff_length)) == 0)
+    cufflinks <- mutate(cufflinks, est_counts = tpm_to_alpha(tpm, eff_length))
+    cufflinks <- mutate(cufflinks, est_counts = est_counts * xprs_tot_counts[[id]])
+
+    cufflinks
+  })
+
+all_cufflinks_hisat <- lapply(1:20,
+  function(id) {
+    fname <- file.path(base_dir, id, "cufflinks/hisat", "isoforms.fpkm_tracking")
+
+    cufflinks <- read_cufflinks(fname, oracle_mfl[[id]])
+    cufflinks <- inner_join(cufflinks,
+      select(all_oracle[[id]], target_id, eff_length),
+      by = 'target_id')
+    stopifnot(sum(is.na(cufflinks$eff_length)) == 0)
+    cufflinks <- mutate(cufflinks, est_counts = tpm_to_alpha(tpm, eff_length))
+    cufflinks <- mutate(cufflinks, est_counts = est_counts * xprs_tot_counts[[id]])
+
+    cufflinks
+  })
+```
+
+```{r}
+lower_bound <- 1e-100
+small_filter <- function(x) {
+  ifelse(x < lower_bound, 0, x)
+}
+```
+
+```{r, warning=FALSE}
+read_emsar <- function(fname) {
+  df <- read.table(fname, stringsAsFactors = FALSE, header = TRUE)
+  df <- dplyr::select(df, target_id = transcriptID, est_counts = iReadcount,
+    tpm = TPM)
+
+  df
+}
+
+all_emsar <- lapply(1:20,
+  function(id) {
+    fname <- file.path(base_dir, id, "emsar", "emsar.0.fpkm")
+    read_emsar(fname)
   })
 ```
 
@@ -109,69 +156,134 @@ all_sailfish <- lapply(all_sailfish, function(x) {
   #x$est_counts <- x$est_counts * (30e6/sum(x$est_counts))
   x$est_counts <- x$est_counts  / 2
   x
-})  
+})
 ```
 
 ```{r,warning=FALSE}
 all_kallisto <- lapply(1:20,
   function(id)
   {
-    fname <- file.path(base_dir, id, "kallisto_soft", "abundance.h5")
+    fname <- file.path(base_dir, id, "kallisto", "abundance.h5")
     read_kallisto_h5(fname, FALSE)$abundance
   })
 ```
 
+```{r}
+all_xprs <- lapply(all_xprs,
+  function(x) {
+    mutate(x, tpm = counts_to_tpm(est_counts, eff_length))
+  })
+```
+
+```{r}
+all_cufflinks_hisat <- lapply(all_cufflinks_hisat,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_cufflinks_tophat <- lapply(all_cufflinks_tophat,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_sailfish <- lapply(all_sailfish,
+    function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_xprs <- lapply(all_xprs,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_rsem <- lapply(all_rsem,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+  })
+all_kallisto <- lapply(all_kallisto,
+  function(x) {
+    mutate(x, est_counts = small_filter(est_counts))
+    })
+```
 
 ```{r}
 mr <- lapply(seq_along(all_oracle),
   function(id)
   {
     merge_results(
-      list(all_sailfish[[id]], all_xprs[[id]], all_cufflinks[[id]], all_rsem[[id]],
-           all_kallisto[[id]]),
-      c("sailfish", "express", "cufflinks", "rsem", "kallisto"),
+      list(all_sailfish[[id]],
+           all_xprs[[id]],
+           all_cufflinks_tophat[[id]],
+           all_cufflinks_hisat[[id]],
+           all_rsem[[id]],
+           all_kallisto[[id]],
+           all_emsar[[id]]
+        ),
+      c("Sailfish",
+        "Bowtie2\n+\neXpress",
+        "TopHat2\n+\nCufflinks",
+        "HISAT\n+\nCufflinks",
+        "Bowtie2\n+\nRSEM",
+        "kallisto",
+        "EMSAR"
+        ),
       all_oracle[[id]])
   })
 ```
-
 ```{r}
 no_filt_all <- lapply(mr,
-    function(res)
-    {
+    function(res) {
         filtered_summary(res)$est_counts
     }) %>%
     rbind_all()
 ```
 
-
-```{r,fig.width=14,fig.height=10}
+```{r}
 no_filt_all %>%
-  mutate(method = sub("est_counts_", "", method)) %>%
-  mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
-#   mutate(method = factor(method, labels = c(
-#                                             "TopHat2\n+\nCufflinks",
-#                                             "Sailfish",
-#                                             "Bowtie2\n+\neXpress",
-#                                             "kallisto",
-#                                             "Bowtie2\n+\nRSEM"
-#                                             ))) %>% 
   group_by(method) %>%
-  summarise(med_rel_diff = mean(med_scaled_err)) %>%
-  ggplot(aes(method, med_rel_diff)) +
+  summarise(mean_pearson = mean(pearson),
+            mean_spearman = mean(spearman),
+            mean_mrd = mean(mrd)) %>%
+  arrange(mean_mrd)
+```
+
+```{r}
+filter_perfect <- lapply(mr,
+    function(res)
+    {
+        filtered_summary(res)$est_counts
+    }) %>%
+    rbind_all() %>%
+  group_by(method) %>%
+  summarize(mean_pearson = mean(pearson),
+            mean_spearman = mean(spearman),
+    mean_mrd = mean(mrd)
+    ) %>%
+  arrange(mean_mrd)
+```
+
+This next plot shows performance on mean of median relative difference which appears in the paper:
+
+```{r}
+filter_perfect %>%
+  mutate(method = sub('est_counts_', '', as.character(method))) %>%
+  mutate(method = factor(method, arrange(., desc(mean_mrd))[['method']])) %>%
+  ggplot(aes(method, mean_mrd)) +
     geom_bar(stat="identity", fill = "black") +
-    geom_text(aes(label = round(med_rel_diff, 2),
-                  y = med_rel_diff + 0.06),
+    geom_text(aes(label = round(mean_mrd, 2)),
+      position=position_dodge(width=0.9), vjust=-0.25,
               colour = "black", size = 5.5) +
-    xlab("") + 
-    theme_bw() +
-    ylab("median relative difference") +  
+    xlab("method") +
+    theme_classic() +
+    ylab("median relative difference") +
     theme(legend.position = "none",
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
           axis.text.y=element_text(size=16),
           axis.text.x=element_text(size=17),
           axis.title.y=element_text(size=20, vjust=1),
           axis.title.x=element_text(size=20) ) +
       ylim(0, 1)
+ggsave("../img/mrd.png", width = 18.6, height = 8.08)
 ```
+
+## tpm
 
 ```{r}
 no_filt_tpm <- lapply(mr,
@@ -182,177 +294,193 @@ no_filt_tpm <- lapply(mr,
     rbind_all()
 ```
 
-Looking at TPM:
+```{r}
+no_filt_tpm %>%
+  group_by(method) %>%
+  summarise(mean_pearson = mean(pearson),
+            mean_spearman = mean(spearman),
+            mean_mrd = mean(mrd, na.rm = TRUE)) %>%
+  arrange(mean_mrd)
+```
+
+These plots show the cufflinks is behaving strangely.
+
+```{r}
+ggplot(filter(mr[[1]]$m_tpm, grepl('TopHat', method)), aes(oracle +1, estimate +1)) +
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10()
+
+ggplot(filter(mr[[1]]$m_tpm, grepl('RS', method)), aes(oracle +1, estimate +1)) +
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10()
+```
+
+Looking at TPM mrd:
 
 ```{r,fig.width=14,fig.height=10}
 no_filt_tpm %>%
+  #filter(!grepl("mon", method)) %>%
   mutate(method = sub("tpm_", "", method)) %>%
+
   group_by(method) %>%
-  summarise(med_rel_diff = mean(med_scaled_err)) %>%
-  ggplot(aes(method, med_rel_diff)) +
+  summarise(mean_pearson = mean(pearson),
+            mean_spearman = mean(spearman),
+            mean_mrd = mean(mrd, na.rm = TRUE)) %>%
+  arrange(mean_mrd) %>%
+  mutate(method = factor(method, arrange(., desc(mean_mrd))[['method']])) %>%
+  ggplot(aes(method, mean_mrd)) +
     geom_bar(stat="identity", fill = "black") +
-    geom_text(aes(label = round(med_rel_diff, 2),
-                  y = med_rel_diff + 0.06),
+    geom_text(aes(label = round(mean_mrd, 2)),
+      position=position_dodge(width=0.9), vjust=-0.25,
               colour = "black", size = 5.5) +
-    xlab("") + 
-    theme_bw() +
-    ylab("median relative difference") +  
+    xlab("method") +
+    # theme_bw() +
+    theme_classic() +
+    ylab("median relative difference") +
     theme(legend.position = "none",
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
           axis.text.y=element_text(size=16),
           axis.text.x=element_text(size=17),
           axis.title.y=element_text(size=20, vjust=1),
           axis.title.x=element_text(size=20) ) +
       ylim(0, 1)
+ggsave("../img/mrd_tpm.png", width = 18.6, height = 8.08)
 ```
-
-
-## Filtering
-
-```{r}
-filt_tpm_1_all <- lapply(mr,
-    function(res)
-    {
-        filtered_summary(res, tpm_oracle >= 1.0)$est_counts
-    }) %>%
-    rbind_all()
-```
-
-
 
 # Timings
 
 ```{r,echo=FALSE}
-time_base_dir <- "~/kallisto_paper_analysis/simulations/benchmarks/NA12716_7/rsem/sim/30000000/"
+time_base_dir <- "../../benchmarks/NA12716_7/rsem/sim/30000000/"
 ```
-
-```{r}
-mr_upd <- lapply(mr,
-       function(res) {
-         res$all_data <- filter(res$all_data, length >= 500)
-         res$m_est_counts <- inner_join(
-           dplyr::select(res$all_data, target_id),
-           res$m_est_counts,
-           by = "target_id")
-          res$m_tpm <- inner_join(
-           dplyr::select(res$all_data, target_id),
-           res$m_tpm,
-           by = "target_id")
-         
-         res$m_tpm %>%
-           group_by(method) %>%
-           mutate(oracle = oracle / sum(oracle), estimate / sum(estimate))
-         res
-       })
-```
-
-
-```{r}
-filt_length <- lapply(mr_upd,
-    function(res)
-    {
-        filtered_summary(res, tpm_oracle >= 1)$tpm
-    }) %>%
-    rbind_all()
-```
-
-```{r}
-filt_length %>%
-  mutate(method = sub("tpm_", "", method)) %>%
-  group_by(method) %>%
-  summarise(med_rel_diff = mean(med_scaled_err)) %>%
-  ggplot(aes(method, med_rel_diff)) +
-    geom_bar(stat="identity", fill = "black") +
-    geom_text(aes(label = round(med_rel_diff, 2),
-                  y = med_rel_diff + 0.06),
-              colour = "black", size = 5.5) +
-    xlab("") + 
-    theme_bw() +
-    ylab("median relative difference") +  
-    theme(legend.position = "none",
-          axis.text.y=element_text(size=16),
-          axis.text.x=element_text(size=17),
-          axis.title.y=element_text(size=20, vjust=1),
-          axis.title.x=element_text(size=20) ) +
-      ylim(0, 1)
-```
-
-
 
 ```{r,echo=FALSE}
-load_sec <- function(path) {
-  timings <- fromJSON(file = path)
+load_sec <- function(fname) {
+  timings <- fromJSON(fname)
   data.frame(seconds = timings$wall_clock_times$s) %>%
     mutate(minutes = seconds / 60.0)
 }
 
-load_timings <- function(nsim, method_name, fname) {
+load_timings <- function(nsim, method_name, fname, type) {
   lapply(1:nsim,
     function(id)
     {
       load_sec(file.path(time_base_dir, id, fname)) %>%
-        mutate(method = method_name, id = id)
+        mutate(method = method_name, id = id, type = type)
     }) %>%
-    rbind_all()  
+    rbind_all()
 }
 ```
 
+load the quantification times
+
 ```{r,echo=FALSE}
-sailfish_times <- load_timings(20, "sailfish", "sailfish.json")
-tophat_times <- load_timings(20, "tophat", "tophat.json")
-cufflinks_times <- load_timings(20, "cufflinks", "cufflinks.json")
-bwt2_times <- load_timings(20, "bwt2", "bwt2.json")
-express_times <- load_timings(20, "express", "express.json")
-bwt2_rsem_times <- load_timings(20, "bwt2_rsem", "bwt2_rsem.json")
-rsem_times <- load_timings(20, "rsem", "rsem.json")
-kallisto_times <- load_timings(20, "kallisto", "kallisto.json")
-#salmon_times <- load_timings(20, "salmon", "salmon.json")
+sailfish_times <- load_timings(20, "Sailfish", "sailfish.json", 'quant')
+cufflinks_tophat_times <- load_timings(20, "TopHat2\n+\nCufflinks",
+  "cufflinks_tophat.json", 'quant')
+cufflinks_hisat_times <- load_timings(20, "HISAT\n+\nCufflinks",
+  "cufflinks_hisat.json", 'quant')
+express_times <- load_timings(20, "Bowtie2\n+\neXpress", "express.json", 'quant')
+rsem_times <- load_timings(20, "Bowtie2\n+\nRSEM", "rsem.json", 'quant')
+emsar_times <- load_timings(20, "Bowtie2\n+\nEMSAR", "emsar.json", 'quant')
+kallisto_times <- load_timings(20, "kallisto", "kallisto.json", 'quant')
 ```
 
-Merge to get pipeline results
+load the alignments times
 
 ```{r}
-total_time_express <- sum(bwt2_times$seconds) + max(express_times$seconds)
-total_time_sailfish <- sum(sailfish_times$seconds)
-total_time_cufflinks <- sum(tophat_times$seconds) + sum(cufflinks_times$seconds)
-total_time_rsem <- sum(bwt2_rsem_times$seconds) + sum(rsem_times$seconds)
-total_time_kallisto <- max(kallisto_times$seconds)
-
-total_time_summary <- data.frame(
-  method = factor(c("Bowtie2\n+\neXpress", "Sailfish",
-                    "TopHat2\n+\nCufflinks", "Bowtie2\n+\nRSEM",
-                    "kallisto"),
-                  levels = c("kallisto", "Sailfish", "Bowtie2\n+\neXpress",
-                             "Bowtie2\n+\nRSEM", "TopHat2\n+\nCufflinks")),
-  seconds = c(total_time_express, total_time_sailfish, total_time_cufflinks,
-              total_time_rsem, total_time_kallisto),
-  stringsAsFactors = FALSE) %>%
-  mutate(minutes = seconds / 60) %>%
-  arrange(seconds)
-cbbPalette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
-  "#D55E00", "#CC79A7", "#000000")
+tophat_times <- load_timings(20, "TopHat2\n+\nCufflinks", "tophat.json", 'align')
+hisat_times <- load_timings(20, "HISAT\n+\nCufflinks", "hisat.json", 'align')
+bwt2_times <- load_timings(20, "Bowtie2\n+\neXpress", "bwt2.json", 'align')
+bwt2_emsar_times <- load_timings(20, "Bowtie2\n+\nEMSAR", "bwt2.json", 'align')
+bwt2_rsem_times <- load_timings(20, "Bowtie2\n+\nRSEM", "bwt2_rsem.json", 'align')
 ```
 
 ```{r}
-total_time_summary$method <- reorder(total_time_summary$method, -total_time_summary$minutes)
+all_times <- bind_rows(
+  sailfish_times,
+  cufflinks_tophat_times,
+  cufflinks_hisat_times,
+  express_times,
+  rsem_times,
+  emsar_times,
+  kallisto_times,
+  tophat_times,
+  hisat_times,
+  bwt2_times,
+  bwt2_emsar_times,
+  bwt2_rsem_times)
 ```
 
-
+get the total times
 
 ```{r}
-total_time_summary <- total_time_summary %>%
-  mutate(pos = minutes)
-total_time_summary %>%
-  ggplot(aes(method, minutes)) +
-    geom_bar(stat="identity", fill = "dark grey") +
-    geom_text(aes(label = round(minutes, 2), y = pos),
-              colour = "black", size = 7) +
-    xlab("Method") +
-    ylab("Minutes") +
-    theme_bw(25) +
-    theme(legend.position = "none")
+serial_times <- all_times %>%
+  filter(grepl('Top|HI|RSE|fish|mon|EMS', method)) %>%
+  group_by(method) %>%
+  summarize(total = sum(minutes))
+express_align <- all_times %>%
+  filter(grepl('press', method)) %>%
+  filter(type == 'align') %>%
+  group_by(method) %>%
+  summarize(total = sum(minutes))
+parallel_times <- all_times %>%
+  filter(grepl('press|isto', method))  %>%
+  filter(type == 'quant') %>%
+  group_by(method) %>%
+  summarize(total = max(minutes))
+total_times <- bind_rows(serial_times, express_align, parallel_times) %>%
+  group_by(method) %>%
+  summarize(total = sum(total))
+```
+
+these are timings broken up by alignment and quantification
+
+```{r}
+all_times %>%
+  filter(grepl('Top|HI|RSE|fish|mon|EMS', method)) %>%
+  group_by(method, type) %>%
+  summarize(total = sum(minutes))
+```
+
+```{r}
+parallel_times <- parallel_times %>%
+  mutate(type = 'quant', id = 0) %>%
+  rename(minutes = total)
+plot_times <- bind_rows(
+  parallel_times,
+  bwt2_times,
+  filter(all_times, grepl('Top|HI|RSE|fish|EMS', method)))
+```
+
+```{r}
+plot_times %>%
+  mutate(method = factor(method, arrange(total_times, desc(total))[['method']])) %>%
+  rename(stage = type) %>%
+  #mutate(type = factor(type, levels = c('quant', 'align'))) %>%
+  ggplot(aes(method, minutes, fill = stage, group = as.factor(id)),
+  color = 'black') +
+  geom_bar(color = 'black', stat = 'identity') +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = c(0.95, 0.85),
+    axis.text.y=element_text(size=16),
+    axis.text.x=element_text(size=17),
+    axis.title.y=element_text(size=20, vjust=1),
+    axis.title.x=element_text(size=20),
+    legend.title = element_text(size = 18),
+    legend.text = element_text(size = 16) ) +
+  scale_y_continuous(labels = comma)
+ggsave("../img/timing.png", width = 18.6, height = 8.08)
 ```
 
 # Paralog analysis
+
+Load the definition of paralogs:
 
 ```{r}
 dgd <- fread("../dgd_Hsa_all_v.tsv", header=TRUE)
@@ -360,13 +488,14 @@ dgd_unique <- dgd %>%
   dplyr::select(gene_id = ENS_ID) %>%
   distinct()
 ```
+
+Get gene names from ensembl:
+
 ```{r}
-library(biomaRt)
-mart <- useMart(biomart = "ensembl", dataset
-      = "hsapiens_gene_ensembl")
-gene_names <- getBM(attributes
-      = c("ensembl_transcript_id","ensembl_gene_id"), mart
-      = mart)
+mart <- biomaRt::useMart(dataset = "hsapiens_gene_ensembl",
+  biomart="ENSEMBL_MART_ENSEMBL", host="sep2015.archive.ensembl.org")
+gene_names <- biomaRt::getBM(attributes = c("ensembl_transcript_id",
+  "ensembl_gene_id"), mart = mart)
 ```
 
 ```{r}
@@ -377,11 +506,10 @@ dgd_unique <- dgd_unique %>%
   data.table() %>%
   inner_join(gene_names, by = "gene_id")
 mr_paralog <- lapply(mr,
-                     function(x)
-                       {
-                        x$m_est_counts <- inner_join(x$m_est_counts, dgd_unique, by = "target_id")
-                        x
-                       })
+  function(x) {
+    x$m_est_counts <- inner_join(x$m_est_counts, dgd_unique, by = "target_id")
+    x
+  })
 ```
 
 sanity check:
@@ -396,43 +524,38 @@ n_paralog_trans
 ```{r}
 # nf - no filter
 nf_paralog <- lapply(mr_paralog,
-    function(res)
-    {
+    function(res) {
         filtered_summary(res)$est_counts
     }) %>%
     rbind_all()
 ```
 
 ```{r}
-
 nf_paralog %>%
   mutate(method = sub("est_counts_", "", method)) %>%
-  mutate(method = factor(method, levels = c("cufflinks", "sailfish", "express", "kallisto", "rsem"))) %>%
-  mutate(method = factor(method, labels = c(
-                                            "TopHat2\n+\nCufflinks",
-                                            "Sailfish",
-                                            "Bowtie2\n+\neXpress",
-                                            "kallisto",
-                                            "Bowtie2\n+\nRSEM"
-                                            ))) %>% 
   group_by(method) %>%
-  summarise(med_rel_diff = mean(med_scaled_err)) %>%
-#   filter(!grepl("cufflinks", method)) %>%
-  ggplot(aes(method, med_rel_diff)) +
+  summarise(mean_mrd = mean(mrd)) %>%
+  mutate(method = factor(method, arrange(., desc(mean_mrd))[['method']])) %>%
+  ggplot(aes(method, mean_mrd)) +
     geom_bar(stat="identity", fill = "black") +
-    geom_text(aes(label = round(med_rel_diff, 2),
-                  y = med_rel_diff + 0.06),
+    geom_text(aes(label = round(mean_mrd, 2)),
+      position=position_dodge(width=0.9), vjust=-0.25,
               colour = "black", size = 5.5) +
-    xlab("") + 
-    theme_bw() +
-    ylab("median relative difference") +  
+    xlab("method") +
+    theme_classic() +
+    ylab("median relative difference") +
     theme(legend.position = "none",
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
           axis.text.y=element_text(size=16),
           axis.text.x=element_text(size=17),
           axis.title.y=element_text(size=20, vjust=1),
           axis.title.x=element_text(size=20) ) +
       ylim(0, 1)
+ggsave("../img/paralog_mrd.png", width = 18.6, height = 8.08)
 ```
+
+Looking at count distribution of paralogs:
 
 ```{r}
 which_paralogs <- mr_paralog[[1]]$m_est_counts %>%
@@ -458,14 +581,11 @@ ggplot(counts_dist, aes(oracle)) +
   facet_wrap(~ lab) +
   theme_bw(20) +
   xlab("true counts")
+ggsave("../img/paralog_distribution.png", width = 18.6, height = 8.08)
 ```
 
-```{r}
-hi <- dplyr::select(all_kallisto[[1]], target_id, eff_len) %>%
-  inner_join(dplyr::select(all_rsem[[1]], target_id, rsem_eff_len = eff_len), by = 'target_id')
+# Session Info
 
-ggplot(hi, aes(eff_len, rsem_eff_len)) +
-  geom_point() +
-  xlim(0, 250) +
-  ylim(0, 250)
+```{r}
+sessionInfo()
 ```

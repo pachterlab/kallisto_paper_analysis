@@ -1,6 +1,5 @@
-ANNO_PRE = 'Homo_sapiens.GRCh37.75.cdna.pc'
-ANNO_FA = '../index/{0}.fa'.format( ANNO_PRE )
-KAL_IDX = '../index/{0}.kidx'.format( ANNO_PRE )
+include: "../config.py"
+
 
 DEEP_A_FNAME = "info/deepest_a_run_id_only.txt"
 
@@ -15,20 +14,400 @@ with open(SAMP_5_FNAME, 'r') as in_handle:
     for line in in_handle:
         SAMP_5.append(line.replace("\n", ""))
 
+# number of reads to subsample
 N_READS=30000000
+
+# number of subsamplings
 N_SUB = [i for i in range(1, 41)]
+
+def get_bgi_a(rep):
+    res = []
+    with open('metadata/A/BGI/' + str(rep) + '/runs.txt') as in_handle:
+        for line in in_handle:
+            res.append( line.replace("\n", "") )
+    return res
+
 
 rule all:
     input:
-        #expand('data/{id}/{id}_1.fastq.gz', id = DEEP_A ),
-        #expand('data/{id}/{id}_2.fastq.gz', id = DEEP_A ),
+        expand('data/{id}/{id}_1.fastq.gz', id = DEEP_A ),
+        expand('data/{id}/{id}_2.fastq.gz', id = DEEP_A ),
+
         expand('data/merged_{left}.fastq.gz', left  = [1, 2]),
         expand('sub/ss{id}/ss{id}_{left}.fastq', id = N_SUB, left = [1, 2]),
         expand('sub/ss{id}/ss{id}_{left}.fastq', id = N_SUB, left = [1, 2]),
+
         'results/bootstrap9999/abundance.h5',
-        'results/bootstrap9998/abundance.h5',
-        'results/bootstrap9997/abundance.h5',
-        expand('results/ss{id}/abundance.h5', id = N_SUB)
+        'results/bootstrap9999/cufflinks/isoforms.fpkm_tracking',
+        'results/bootstrap9999/rsem/out.isoforms.results',
+        "results/bootstrap9999/express/results.xprs",
+        expand('results/ss{id}/abundance.h5', id = N_SUB),
+
+        expand('metadata/A/BGI/{rep}/runs.txt', rep = range(1, 5)),
+        expand('data/A/BGI/{rep}/done.txt', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/kallisto/abundance.h5', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/kallisto_bias/abundance.h5', rep = range(1,5)),
+
+        expand('results/A/BGI/{rep}/emsar/emsar.0.fpkm', rep = range(1,5)),
+
+        expand('results/A/BGI/{rep}/sailfish/quant.sf', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/sailfish_bias/quant.sf', rep = range(1,5)),
+        expand('results/A/BGI/1/kallisto_bootstrap/abundance.h5'),
+
+        expand('results/A/BGI/{rep}/cufflinks/isoforms.fpkm_tracking', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/cufflinks_bias/isoforms.fpkm_tracking', rep = range(1,5)),
+
+        expand('results/A/BGI/{rep}/rsem/out.isoforms.results', rep = range(1,5)),
+
+        expand('results/A/BGI/{rep}/express/results.xprs', rep = range(1,5)),
+
+        'data/gene_pcr.rds',
+        'data/qpcra_processed.rds',
+        'results/gene_pcr_analysis.tsv',
+        'results/isoform_pcr_analysis.tsv',
+        'R/bootstrap.html'
+
+
+rule bgi_samples:
+    output:
+        expand('metadata/A/BGI/{rep}/runs.txt', rep = range(1, 5))
+    shell:
+        source_r('R', 'get_samp_a.R')
+
+
+rule bgi_fastq_dump:
+    input:
+        rules.bgi_samples.output
+    output:
+        'data/A/BGI/{rep}/done.txt'
+    threads: 1
+    run:
+        w_rep = wildcards.rep
+        out_dir = 'data/A/BGI/' + w_rep + '/fastq'
+        for f in get_bgi_a(w_rep):
+            print(f)
+            shell('fastq-dump '
+            '--split-files '
+            '--gzip '
+            '-O ' + out_dir + ' ' +
+            f)
+        shell('touch {output}')
+
+
+rule get_pcr:
+    output:
+        'data/gene_pcr.rds',
+        'data/qpcra_processed.rds'
+    shell:
+        source_r('R', 'get_qpcr.R')
+
+
+########################################################################
+# Looking at BGI/A
+########################################################################
+
+rule bgi_tophat:
+    input:
+        rules.bgi_fastq_dump.output
+    output:
+        "results/alignments/A/BGI/{rep}/tophat",
+        "results/alignments/A/BGI/{rep}/tophat/accepted_hits.bam"
+    params:
+        base = "results/alignments/tophat_merged"
+    benchmark:
+        "benchmarks/A/BGI/{rep}/tophat.json"
+    threads: N_THREADS
+    message:
+        'Running TopHat2 (thr = {threads}) on {input}'
+    run:
+        in_dir = 'data/A/BGI/{0}/fastq/'.format(wildcards.rep)
+        w_rep = wildcards.rep
+        sra_ids = get_bgi_a(w_rep)
+        left = []
+        right = []
+        for s in sra_ids:
+            left.append( in_dir + s + '_1.fastq.gz' )
+            right.append( in_dir + s + '_2.fastq.gz' )
+        left = ','.join(left)
+        right = ','.join(right)
+        cmd = ['tophat2 ',
+        '-G {ERCC_ANNO_GTF} ',
+        '--transcriptome-index ',
+        # IDX + '/{ANNO_PREFIX}_tophat ' +
+        ANNO_TOPHAT,
+        '--transcriptome-only',
+        '-p {threads} ',
+        '-o {output[0]} ',
+        ERCC_GENOME_BWT,
+        '{left} {right}']
+        cmd = " ".join(cmd)
+
+        print(cmd)
+        shell(cmd)
+
+
+rule bgi_cufflinks:
+    input:
+        "results/alignments/A/BGI/{rep}/tophat/accepted_hits.bam"
+    output:
+        'results/A/BGI/{rep}/cufflinks',
+        'results/A/BGI/{rep}/cufflinks/isoforms.fpkm_tracking'
+    benchmark:
+        "benchmarks/A/BGI/{rep}/cufflinks.json"
+    threads: N_THREADS
+    shell:
+        'cufflinks '
+        '-o {output[0]} '
+        '-p {threads} '
+        '-u '
+        '--quiet '
+        '--GTF {ERCC_ANNO_GTF} '
+        '{input[0]}'
+
+
+rule bgi_cufflinks_bias:
+    input:
+        "results/alignments/A/BGI/{rep}/tophat/accepted_hits.bam"
+    output:
+        'results/A/BGI/{rep}/cufflinks_bias',
+        'results/A/BGI/{rep}/cufflinks_bias/isoforms.fpkm_tracking'
+    benchmark:
+        "benchmarks/A/BGI/{rep}/cufflinks_bias.json"
+    threads: N_THREADS
+    shell:
+        'cufflinks '
+        '-o {output[0]} '
+        '-p {threads} '
+        '-u '
+        '--quiet '
+        '-b {ERCC_GENOME_FA} '
+        '--GTF {ERCC_ANNO_GTF} '
+        '{input[0]}'
+
+
+# bwt2 alignments for RSEM
+rule bgi_bwt2_rsem:
+    input:
+        rules.bgi_fastq_dump.output
+    output:
+        "results/alignments/A/BGI/{rep,\d+}/bwt2_rsem.bam"
+    threads: N_THREADS
+    benchmark:
+        "benchmarks/A/BGI/{rep}/bwt2_rsem.json"
+    run:
+        in_dir = 'data/A/BGI/{0}/fastq/'.format(wildcards.rep)
+        w_rep = wildcards.rep
+        sra_ids = get_bgi_a(w_rep)
+        left = []
+        right = []
+        for s in sra_ids:
+            left.append( in_dir + s + '_1.fastq.gz' )
+            right.append( in_dir + s + '_2.fastq.gz' )
+        left = ','.join(left)
+        right = ','.join(right)
+        cmd = ['bowtie2',
+        '--sensitive --dpad 0 --gbar 99999999 --mp 1,1 --np 1 --score-min L,0,-0.1',
+        '--no-mixed --no-discordant',
+        '--seed 42',
+        '-k 200',
+        '-x ' + ERCC_ANNO_BWT + ' ',
+        '-p {threads}',
+        '-1 {left}',
+        '-2 {right} |',
+        'samtools view -Sb - > {output}']
+        cmd = " ".join(cmd)
+        print(cmd)
+        shell(cmd)
+
+
+rule bgi_bwt2_express:
+    input:
+        rules.bgi_fastq_dump.output
+    output:
+        "results/alignments/A/BGI/{rep,\d+}/bwt2_express.bam"
+    threads: N_THREADS
+    benchmark:
+        "benchmarks/A/BGI/{rep}/bwt2_express.json"
+    run:
+        in_dir = 'data/A/BGI/{0}/fastq/'.format(wildcards.rep)
+        w_rep = wildcards.rep
+        sra_ids = get_bgi_a(w_rep)
+        left = []
+        right = []
+        for s in sra_ids:
+            left.append( in_dir + s + '_1.fastq.gz' )
+            right.append( in_dir + s + '_2.fastq.gz' )
+        left = ','.join(left)
+        right = ','.join(right)
+        cmd = ['bowtie2 ',
+        '--no-mixed --no-discordant --rdg 6,5 --rfg 6,5 --score-min L,-.6,-.4 ',
+        '-k 200 ',
+        '-x ' + ERCC_ANNO_BWT + ' ',
+        '-p {threads} ',
+        '-1 {left} ',
+        '-2 {right} |',
+        'samtools view -Sb - > {output}']
+        cmd = " ".join(cmd)
+        print(cmd)
+        shell(cmd)
+
+
+rule bgi_rsem:
+    input:
+        "results/alignments/A/BGI/{rep,\d+}/bwt2_rsem.bam"
+    output:
+        'results/A/BGI/{rep}/rsem',
+        'results/A/BGI/{rep}/rsem/out.isoforms.results'
+    benchmark:
+        "benchmarks/A/BGI/{rep}/rsem.json"
+    threads: N_THREADS
+    shell:
+        'rsem-calculate-expression '
+        '--bam '
+        '--paired-end '
+        '--no-bam-output '
+        '-p {threads} '
+        '{input} ' +
+        '{ERCC_RSEM_DIR}/ref ' +
+        '{output[0]}/out'
+
+
+rule bgi_express:
+    input:
+        "results/alignments/A/BGI/{rep,\d+}/bwt2_express.bam"
+    output:
+        'results/A/BGI/{rep}/express',
+        'results/A/BGI/{rep}/express/results.xprs'
+    benchmark:
+        "benchmarks/A/BGI/{rep}/rsem.json"
+    threads: 2
+    shell:
+        'express '
+        '-B 10 '
+        '-o {output[0]} ' +
+        ERCC_ANNO_FA + ' '
+        '{input}'
+
+
+rule bgi_kallisto:
+    input:
+        rules.bgi_fastq_dump.output
+    output:
+        'results/A/BGI/{rep}/kallisto',
+        'results/A/BGI/{rep}/kallisto/abundance.h5'
+    threads: 5
+    benchmark:
+        'benchmarks/A/BGI/{rep}/kallisto.json'
+    run:
+        in_dir = 'data/A/BGI/{wildcards.rep}/fastq/'
+        w_rep = wildcards.rep
+        sra_ids = get_bgi_a(w_rep)
+        fastq_pairs = []
+        for s in sra_ids:
+            fastq_pairs.append( in_dir + s + '_1.fastq.gz' )
+            fastq_pairs.append( in_dir + s + '_2.fastq.gz' )
+        fastq_pairs = ' '.join(fastq_pairs)
+        shell(KALLISTO + ' quant -i {ERCC_KAL_IDX} -t {threads} -b 30 -o {output[0]} ' + fastq_pairs)
+
+
+rule bgi_kallisto_bias:
+    input:
+        rules.bgi_fastq_dump.output
+    output:
+        'results/A/BGI/{rep}/kallisto_bias',
+        'results/A/BGI/{rep}/kallisto_bias/abundance.h5'
+    threads: 5
+    benchmark:
+        'benchmarks/A/BGI/{rep}/kallisto_bias.json'
+    run:
+        in_dir = 'data/A/BGI/{wildcards.rep}/fastq/'
+        w_rep = wildcards.rep
+        sra_ids = get_bgi_a(w_rep)
+        fastq_pairs = []
+        for s in sra_ids:
+            fastq_pairs.append( in_dir + s + '_1.fastq.gz' )
+            fastq_pairs.append( in_dir + s + '_2.fastq.gz' )
+        fastq_pairs = ' '.join(fastq_pairs)
+        shell(KALLISTO + ' quant -i {ERCC_KAL_IDX} -t {threads} --bias -b 30 -o {output[0]} ' + fastq_pairs)
+
+
+rule bgi_kallisto_bias_bootstrap:
+    input:
+        rules.bgi_fastq_dump.output
+    output:
+        'results/A/BGI/{rep}/kallisto_bootstrap',
+        'results/A/BGI/{rep}/kallisto_bootstrap/abundance.h5'
+    threads: 10
+    benchmark:
+        'benchmarks/A/BGI/{rep}/kallisto_bootstrap_bias.json'
+    run:
+        in_dir = 'data/A/BGI/{wildcards.rep}/fastq/'
+        w_rep = wildcards.rep
+        sra_ids = get_bgi_a(w_rep)
+        fastq_pairs = []
+        for s in sra_ids:
+            fastq_pairs.append( in_dir + s + '_1.fastq.gz' )
+            fastq_pairs.append( in_dir + s + '_2.fastq.gz' )
+        fastq_pairs = ' '.join(fastq_pairs)
+        shell(KALLISTO + ' quant -i {ERCC_KAL_IDX} -t {threads} --bias -b 1000 -o {output[0]} ' + fastq_pairs)
+
+
+rule bgi_sailfish:
+    input:
+        rules.bgi_fastq_dump.output
+    output:
+        'results/A/BGI/{rep}/sailfish',
+        'results/A/BGI/{rep}/sailfish/quant.sf'
+    threads: N_THREADS
+    run:
+        w_rep = wildcards.rep
+        sra_ids = get_bgi_a(w_rep)
+        in_dir = 'data/A/BGI/' + wildcards.rep + '/fastq/'
+        left = []
+        right = []
+        for s in sra_ids:
+            left.append( in_dir + s + '_1.fastq.gz' )
+            right.append( in_dir + s + '_2.fastq.gz' )
+        left = ' '.join(left)
+        right = ' '.join(right)
+        shell(SAILFISH + ' quant -i {ERCC_SAILFISH_IDX} --no_bias_correct '
+            '-l "T=PE:S=U" -p {threads} -o {output[0]} '
+            '-1 <(zcat {left}) -2 <(zcat {right})')
+
+
+rule bgi_sailfish_bias:
+    input:
+        rules.bgi_fastq_dump.output
+    output:
+        'results/A/BGI/{rep}/sailfish_bias',
+        'results/A/BGI/{rep}/sailfish_bias/quant.sf'
+    threads: N_THREADS
+    run:
+        w_rep = wildcards.rep
+        sra_ids = get_bgi_a(w_rep)
+        in_dir = 'data/A/BGI/' + wildcards.rep + '/fastq/'
+        left = []
+        right = []
+        for s in sra_ids:
+            left.append( in_dir + s + '_1.fastq.gz' )
+            right.append( in_dir + s + '_2.fastq.gz' )
+        left = ' '.join(left)
+        right = ' '.join(right)
+        shell(SAILFISH + ' quant -i {ERCC_SAILFISH_IDX} '
+            '-l "T=PE:S=U" -p {threads} -o {output[0]} '
+            '-1 <(zcat {left}) -2 <(zcat {right})')
+
+
+rule bgi_emsar:
+    input:
+        "results/alignments/A/BGI/{rep,\d+}/bwt2_express.bam",
+        ERCC_EMSAR_100_IDX
+    output:
+        'results/A/BGI/{rep}/emsar/emsar.0.fpkm'
+    threads: N_THREADS
+    shell:
+        EMSAR + ' -B -P -p {N_THREADS} -I {ERCC_EMSAR_100_IDX} results/A/BGI/{wildcards.rep}/emsar emsar results/alignments/A/BGI/{wildcards.rep}/bwt2_express.bam'
+
 
 rule fastq_dump:
 #    input:
@@ -47,8 +426,10 @@ rule fastq_dump:
         shell('gzip {output[0]}')
         shell('gzip {output[1]}')
 
+
 def merge_deep_a(wildcards):
     return ["data/{0}/{0}_{1}.fastq.gz".format(i, wildcards['left']) for i in SAMP_5]
+
 
 rule merge:
     input: merge_deep_a
@@ -58,10 +439,10 @@ rule merge:
     shell:
         'zcat {input} | gzip -c  > {output} '
 
-########################################################################
-# subsample stuff
-########################################################################
 
+########################################################################
+# Subsample things
+########################################################################
 
 rule subsample_left:
     input:
@@ -74,6 +455,7 @@ rule subsample_left:
         '-s {wildcards.id} '
         '{input} ' + str(N_READS) + ' '
         '> sub/ss{wildcards.id}/ss{wildcards.id}_1.fastq'
+
 
 rule subsample_right:
     input:
@@ -89,7 +471,7 @@ rule subsample_right:
 
 
 ########################################################################
-# quantify
+# Quantify
 ########################################################################
 
 rule kallisto_ss:
@@ -105,6 +487,7 @@ rule kallisto_ss:
         '-o results/ss{wildcards.id} '
         '{input[0]} {input[1]}'
 
+
 rule kallisto_bootstrap:
     input:
         'sub/ss{id}/ss{id}_1.fastq',
@@ -118,3 +501,248 @@ rule kallisto_bootstrap:
         '-o results/bootstrap{wildcards.id} '
         '-b 40 '
         '{input[0]} {input[1]}'
+
+
+rule hisat_bootstrap:
+    input:
+        'sub/ss{id}/ss{id}_1.fastq',
+        'sub/ss{id}/ss{id}_2.fastq',
+        HISAT_SPLICESITES,
+        HISAT_IDX + ".1.bt2"
+    output:
+        'results/bootstrap{id}/ss{id}_hisat.bam'
+    threads: N_THREADS
+    shell:
+        '{HISAT} -p {threads} '
+        '--known-splicesite-infile {HISAT_SPLICESITES} '
+        '--no-temp-splicesite '
+        '-x {HISAT_IDX} '
+        '-1 {input[0]} -2 {input[1]} | '
+        'samtools sort - results/bootstrap{wildcards.id}/ss{wildcards.id}_hisat'
+
+
+rule bwt2_express_bootstrap:
+    input:
+        'sub/ss{id}/ss{id}_1.fastq',
+        'sub/ss{id}/ss{id}_2.fastq'
+    output:
+        'results/bootstrap{id}/ss{id}_express.bam'
+    threads: N_THREADS
+    shell:
+        'bowtie2 '
+        '--no-mixed --no-discordant --rdg 6,5 --rfg 6,5 --score-min L,-.6,-.4 '
+        '-k 200 '
+        '-x ' + ANNO_BWT + ' '
+        '-p {threads} '
+        '-1 {input[0]} '
+        '-2 {input[1]} |'
+        'samtools view -Sb - > {output}'
+
+
+rule bwt2_rsem_bootstrap:
+    input:
+        'sub/ss{id}/ss{id}_1.fastq',
+        'sub/ss{id}/ss{id}_2.fastq'
+    output:
+        'results/bootstrap{id}/ss{id}_rsem.bam'
+    threads: N_THREADS
+    shell:
+        'bowtie2 '
+        '--sensitive --dpad 0 --gbar 99999999 --mp 1,1 --np 1 --score-min L,0,-0.1 '
+        '--no-mixed --no-discordant '
+        '--seed 42 '
+        '-k 200 '
+        '-x ' + ANNO_BWT + ' '
+        '-p {threads} '
+        '-1 {input[0]} '
+        '-2 {input[1]} | '
+        'samtools view -Sb - > {output}'
+
+
+rule cufflinks_bootstrap:
+    input:
+        'results/bootstrap{id}/ss{id}_hisat.bam',
+        'sub/ss{id}/ss{id}_1.fastq',
+        'sub/ss{id}/ss{id}_2.fastq'
+    output:
+        'results/bootstrap{id}/cufflinks/isoforms.fpkm_tracking'
+    threads: N_THREADS
+    shell:
+        'cufflinks -o results/bootstrap{wildcards.id}/cufflinks/ -p {threads} -u --quiet --GTF {ANNO_GTF} results/bootstrap{wildcards.id}/ss{wildcards.id}_hisat.bam'
+
+
+rule rsem_bootstrap:
+    input:
+        'results/bootstrap{id}/ss{id}_rsem.bam'
+    output:
+        'results/bootstrap{id}/rsem/out.isoforms.results'
+    threads: N_THREADS
+    run:
+        out_path = "results/bootstrap{wildcards.id}/rsem/"
+        shell("mkdir -p " + out_path)
+        out_prefix = out_path + "/out"
+        cmd = " ".join(["rsem-calculate-expression", "--calc-ci", "--bam", "--paired-end",
+            "--no-bam-output", "-p {threads}", "{input}", RSEM_REF, out_prefix])
+        shell(cmd)
+
+
+rule express_bootstrap:
+    input:
+        'results/bootstrap{id}/ss{id}_express.bam'
+    output:
+        "results/bootstrap{id}/express/results.xprs"
+    threads: 2
+    shell:
+        'express --no-bias-correct '
+        '-B 10 '
+        '-o results/bootstrap{wildcards.id}/express/ ' +
+        ANNO_FA + ' '
+        '{input}'
+
+
+################################################################################
+# merge analysis
+################################################################################
+
+rule kallisto_merged:
+    input:
+        expand('data/merged_{i}.fastq.gz', i = [1,2])
+    output:
+        'results/merged/abundance.h5'
+    params:
+        base = 'results/merged'
+    benchmark:
+        'benchmarks/merged/kallisto.json'
+    threads: 1
+    shell:
+        '{KALLISTO} quant '
+        '-i {KAL_IDX} '
+        '-o {params.base} '
+        '{input[0]} {input[1]}'
+
+# genomes
+
+###
+# tool-specific indices
+###
+
+# bwt2 alignments for RSEM
+rule bwt2_rsem_merged:
+    input:
+        expand('data/merged_{i}.fastq.gz', i = [1,2])
+    output:
+        "results/alignments/merged_bwt2_rsem.bam"
+    benchmark:
+        "benchmarks/rsem/merged_bwt2_rsem.json"
+    threads: N_THREADS
+    message:
+        'Running bowtie2 (thr = {threads}) on {input}'
+    shell:
+        'bowtie2 '
+        '--sensitive --dpad 0 --gbar 99999999 --mp 1,1 --np 1 --score-min L,0,-0.1 '
+        '--no-mixed --no-discordant '
+        '--seed 42 '
+        '-k 200 '
+        '-x ' + ANNO_BWT + ' '
+        '-p {threads} '
+        '-1 {input[0]} '
+        '-2 {input[1]} | '
+        'samtools view -Sb - > {output}'
+
+
+# run bowtie2 on RSEM simulated data for eXpress
+rule bwt2_express_rsem_sim:
+    input:
+        expand('data/merged_{i}.fastq.gz', i = [1,2])
+    output:
+        "results/alignments/merged_bwt2_express.bam"
+    benchmark:
+        "benchmarks/merged/bwt2_rsem.json"
+    threads: N_THREADS
+    shell:
+        'bowtie2 '
+        '--no-mixed --no-discordant --rdg 6,5 --rfg 6,5 --score-min L,-.6,-.4 '
+        '-k 200 '
+        '-x ' + ANNO_BWT + ' '
+        '-p {threads} '
+        '-1 {input[0]} '
+        '-2 {input[1]} |'
+        'samtools view -Sb - > {output}'
+
+rule tophat_rsem_sim:
+    input:
+        expand('data/merged_{i}.fastq.gz', i = [1,2]),
+        ANNO_GTF
+    output:
+        "results/alignments/tophat_merged/accepted_hits.bam"
+    params:
+        base = "results/alignments/tophat_merged"
+    benchmark:
+        "benchmarks/merged/tophat.json"
+    threads: N_THREADS
+    message:
+        'Running TopHat2 (thr = {threads}) on {input}'
+    shell:
+        'tophat2 '
+        '-G {ANNO_GTF} '
+        '--transcriptome-index ' + IDX + '/tophat_{ANNO_GTF} '
+        '--transcriptome-only '
+        '-p {threads} '
+        '-o {params.base} '
+        + GENOME_BWT + ' '
+        '{input[0]} {input[1]}'
+
+
+rule bootstrap_report:
+    input:
+        'R/bootstrap.Rmd',
+        'results/bootstrap9999/abundance.h5',
+        'results/bootstrap9999/cufflinks/isoforms.fpkm_tracking',
+        'results/bootstrap9999/rsem/out.isoforms.results',
+        "results/bootstrap9999/express/results.xprs",
+        expand('results/ss{id}/abundance.h5', id = N_SUB)
+    output:
+        'R/bootstrap.html'
+    threads: 1
+    shell:
+        source_rmd('R', 'bootstrap.Rmd')
+
+
+rule gene_pcr_analysis:
+    input:
+        'R/gene_pcr_analysis.R',
+        'data/gene_pcr.rds',
+        expand('results/A/BGI/{rep}/kallisto/abundance.h5', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/kallisto_bias/abundance.h5', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/emsar/emsar.0.fpkm', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/sailfish/quant.sf', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/sailfish_bias/quant.sf', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/rsem/out.isoforms.results', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/express/results.xprs', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/cufflinks/isoforms.fpkm_tracking', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/cufflinks_bias/isoforms.fpkm_tracking', rep = range(1,5))
+    output:
+        'results/gene_pcr_analysis.tsv'
+    shell:
+        source_r('R', 'gene_pcr_analysis.R')
+
+
+rule isoform_pcr_analysis:
+    input:
+        'R/analysis.R',
+        'data/qpcra_processed.rds',
+        expand('results/A/BGI/{rep}/kallisto/abundance.h5', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/kallisto_bias/abundance.h5', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/emsar/emsar.0.fpkm', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/sailfish/quant.sf', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/sailfish_bias/quant.sf', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/rsem/out.isoforms.results', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/express/results.xprs', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/cufflinks/isoforms.fpkm_tracking', rep = range(1,5)),
+        expand('results/A/BGI/{rep}/cufflinks_bias/isoforms.fpkm_tracking', rep = range(1,5))
+    output:
+        'results/isoform_pcr_analysis.tsv'
+    shell:
+        source_r('R', 'analysis.R')
+
+

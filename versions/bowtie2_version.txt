@@ -1,7 +1,0 @@
-/usr/local/bin/bowtie2-align-s version 2.2.5
-64-bit
-Built on localhost.localdomain
-Thu Mar  5 18:34:52 EST 2015
-Compiler: gcc version 4.1.2 20080704 (Red Hat 4.1.2-54)
-Options: -O3 -m64 -msse2  -funroll-loops -g3 -DPOPCNT_CAPABILITY
-Sizeof {int, long, long long, void*, size_t, off_t}: {4, 8, 8, 8, 8, 8}
